@@ -1,0 +1,12 @@
+export const RUN_SPEED = 21.2;
+export const PLAYER_RADIUS = 0.74;
+export const GROUND_Y = 1.08;
+export const JUMP_VELOCITY = 21.4;
+export const GRAVITY = 66;
+export const FALL_GRAVITY_MULTIPLIER = 2.15;
+export const LOW_JUMP_GRAVITY_MULTIPLIER = 2.25;
+export const HOLD_JUMP_GRAVITY_MULTIPLIER = 0.82;
+export const MAX_HOLD_JUMP_TIME = 0.14;
+export const JUMP_BUFFER_TIME = 0.11;
+export const COYOTE_TIME = 0.08;
+export const PLAYER_TRACK_X = -10.2;

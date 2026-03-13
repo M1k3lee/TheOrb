@@ -1,0 +1,17 @@
+{
+  "name": "The Orb",
+  "short_name": "The Orb",
+  "description": "A neon orb runner with music-locked jumps, cinematic cameras, and beat-synced hazards.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#031018",
+  "theme_color": "#031018",
+  "icons": [
+    {
+      "src": "/orb-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
