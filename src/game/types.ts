@@ -10,6 +10,7 @@ export interface BeatPoint {
   time: number;
   strength: number;
   lane: number;
+  action: "tap" | "hold" | "step" | "bridge" | "climb";
 }
 
 export interface Obstacle {
@@ -22,6 +23,20 @@ export interface Obstacle {
   glow: number;
 }
 
+export interface LavaZone {
+  startTime: number;
+  endTime: number;
+  intensity: number;
+  hue: number;
+}
+
+export interface CameraMoment {
+  time: number;
+  duration: number;
+  strength: number;
+  style: "rear" | "hero" | "sweep" | "rush";
+}
+
 export interface LevelData {
   duration: number;
   beatInterval: number;
@@ -29,6 +44,8 @@ export interface LevelData {
   energyCurve: number[];
   beats: BeatPoint[];
   obstacles: Obstacle[];
+  lavaZones: LavaZone[];
+  cameraMoments: CameraMoment[];
 }
 
 export interface AudioFrame {

@@ -8,7 +8,14 @@ import {
   PLAYER_TRACK_X,
   RUN_SPEED,
 } from "../game/constants";
-import type { BeatPoint, GameSnapshot, LevelData, Obstacle } from "../game/types";
+import type {
+  BeatPoint,
+  CameraMoment,
+  GameSnapshot,
+  LavaZone,
+  LevelData,
+  Obstacle,
+} from "../game/types";
 
 const BACKDROP_VERTEX_SHADER = `
   varying vec2 vUv;
@@ -68,6 +75,39 @@ const BACKDROP_FRAGMENT_SHADER = `
   }
 `;
 
+const LAVA_VERTEX_SHADER = `
+  varying vec2 vUv;
+
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const LAVA_FRAGMENT_SHADER = `
+  varying vec2 vUv;
+
+  uniform float uTime;
+  uniform float uIntensity;
+
+  float stripe(float value, float width) {
+    return smoothstep(0.5 - width, 0.5, sin(value) * 0.5 + 0.5);
+  }
+
+  void main() {
+    float flow = vUv.x * 12.0 - uTime * (1.7 + uIntensity * 0.8);
+    float wave = sin(vUv.x * 10.0 + uTime * 2.4) * 0.18 + cos(vUv.y * 18.0 - uTime * 3.1) * 0.12;
+    float crack = stripe(flow + wave * 4.0, 0.18);
+    float shimmer = stripe(flow * 1.6 - vUv.y * 9.0, 0.08);
+    vec3 base = vec3(0.2, 0.02, 0.01);
+    vec3 lava = mix(vec3(0.95, 0.22, 0.05), vec3(1.0, 0.76, 0.18), clamp(vUv.y + crack * 0.4, 0.0, 1.0));
+    vec3 color = mix(base, lava, crack);
+    color += shimmer * vec3(1.0, 0.85, 0.2) * (0.24 + uIntensity * 0.32);
+
+    gl_FragColor = vec4(color, 0.96);
+  }
+`;
+
 const LANE_OFFSETS = [-2.2, 0, 2.2] as const;
 const EDGE_OFFSETS = [-4.35, 4.35] as const;
 const TRACK_VIEW_AHEAD = 82;
@@ -87,7 +127,6 @@ function createTrackWindow(currentTime: number, level: LevelData | null) {
   const endX = Math.max(startX + 28, Math.min(maxTrackX, currentX + TRACK_VIEW_AHEAD));
 
   return {
-    currentX,
     startX,
     endX,
     centerX: startX + (endX - startX) * 0.5,
@@ -138,6 +177,26 @@ function getVisibleObstacles(obstacles: Obstacle[], currentTime: number) {
   return visible;
 }
 
+function getVisibleLavaZones(lavaZones: LavaZone[], currentTime: number) {
+  const windowStartTime = Math.max(0, currentTime - TRACK_VIEW_BEHIND / RUN_SPEED);
+  const windowEndTime = currentTime + TRACK_VIEW_AHEAD / RUN_SPEED;
+  const visible: LavaZone[] = [];
+
+  for (const zone of lavaZones) {
+    if (zone.endTime < windowStartTime) {
+      continue;
+    }
+
+    if (zone.startTime > windowEndTime) {
+      break;
+    }
+
+    visible.push(zone);
+  }
+
+  return visible;
+}
+
 function createMarkerPositions(startX: number, endX: number) {
   const positions: number[] = [];
   const startIndex = Math.floor(startX / MARKER_SPACING) - 1;
@@ -162,6 +221,26 @@ function createPylonPositions(startX: number, endX: number) {
   return positions;
 }
 
+function getActiveCameraMoment(cameraMoments: CameraMoment[], time: number) {
+  for (let index = cameraMoments.length - 1; index >= 0; index -= 1) {
+    const moment = cameraMoments[index];
+
+    if (time < moment.time - 0.12) {
+      continue;
+    }
+
+    if (time <= moment.time + moment.duration) {
+      return moment;
+    }
+
+    if (time > moment.time + moment.duration) {
+      break;
+    }
+  }
+
+  return null;
+}
+
 function CameraRig({
   level,
   snapshotRef,
@@ -178,8 +257,9 @@ function CameraRig({
     const beatInterval = level?.beatInterval ?? 0.52;
     const barDuration = beatInterval * 8;
     const barIndex = Math.floor(snapshot.time / Math.max(barDuration, 0.001));
+    const activeMoment = level ? getActiveCameraMoment(level.cameraMoments, snapshot.time) : null;
     const shotIndex = barIndex % 6;
-    const shot =
+    const defaultShot =
       shotIndex === 2
         ? "chase"
         : shotIndex === 4
@@ -187,19 +267,43 @@ function CameraRig({
           : shotIndex === 5
             ? "sweep"
             : "default";
+    const shot =
+      activeMoment?.style === "rear"
+        ? "chase"
+        : activeMoment?.style === "hero"
+          ? "hero"
+          : activeMoment?.style === "sweep"
+            ? "sweep"
+            : activeMoment?.style === "rush"
+              ? "rush"
+              : defaultShot;
     const beatPhase = (snapshot.time / Math.max(beatInterval, 0.001)) % 1;
     const beatPulse = Math.max(0, 1 - Math.min(beatPhase, 1 - beatPhase) * 5);
-    const impact = Math.max(snapshot.audio.bass, beatPulse * 0.55);
+    const momentStrength = activeMoment?.strength ?? 0;
+    const impact = Math.max(snapshot.audio.bass, beatPulse * 0.55, momentStrength * 0.72);
     const shotFov =
-      shot === "chase"
-        ? 66
-        : shot === "hero"
-          ? 52
-          : shot === "sweep"
-            ? 56
-            : 62;
+      shot === "rush"
+        ? 72
+        : shot === "chase"
+          ? 66
+          : shot === "hero"
+            ? 52
+            : shot === "sweep"
+              ? 56
+              : 62;
 
-    if (shot === "chase") {
+    if (shot === "rush") {
+      targetPosition.current.set(
+        PLAYER_TRACK_X - 3.4 + snapshot.audio.mid * 0.42,
+        4.9 + (snapshot.playerY - GROUND_Y) * 0.22 + impact * 0.45,
+        10.8 - snapshot.audio.overall * 1.4,
+      );
+      lookTarget.current.set(
+        PLAYER_TRACK_X + 16.8,
+        snapshot.playerY * 0.92 + 0.88,
+        -0.24 + Math.sin(state.clock.elapsedTime * 1.1) * 0.18,
+      );
+    } else if (shot === "chase") {
       targetPosition.current.set(
         PLAYER_TRACK_X - 8.2 + snapshot.audio.mid * 0.26,
         5.6 + (snapshot.playerY - GROUND_Y) * 0.2 + impact * 0.4,
@@ -523,6 +627,43 @@ function Orb({ snapshotRef }: { snapshotRef: SnapshotRef }) {
   );
 }
 
+function LavaPool({ zone }: { zone: LavaZone }) {
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
+  const length = Math.max(2, (zone.endTime - zone.startTime) * RUN_SPEED);
+  const centerX = (zone.startTime + zone.endTime) * RUN_SPEED * 0.5;
+
+  useFrame((state) => {
+    if (!materialRef.current) {
+      return;
+    }
+
+    materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
+    materialRef.current.uniforms.uIntensity.value = zone.intensity;
+  });
+
+  return (
+    <group position={[centerX, 0, 0]}>
+      <mesh position={[0, -0.02, 0]}>
+        <boxGeometry args={[length, 0.12, 8.5]} />
+        <meshStandardMaterial color="#090707" emissive="#120807" emissiveIntensity={0.18} roughness={1} />
+      </mesh>
+      <mesh position={[0, -0.18, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[length, 7.8]} />
+        <shaderMaterial
+          ref={materialRef}
+          fragmentShader={LAVA_FRAGMENT_SHADER}
+          transparent
+          uniforms={{
+            uIntensity: { value: zone.intensity },
+            uTime: { value: 0 },
+          }}
+          vertexShader={LAVA_VERTEX_SHADER}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 function BeatRing({
   beat,
   currentTime,
@@ -531,9 +672,21 @@ function BeatRing({
   currentTime: number;
 }) {
   const proximity = Math.max(0, 1 - Math.abs(beat.time - currentTime) * 3.5);
-  const scale = 0.92 + beat.strength * 0.55 + proximity * 0.45;
+  const actionScale =
+    beat.action === "climb" ? 0.28 : beat.action === "hold" ? 0.18 : beat.action === "bridge" ? 0.12 : 0;
+  const scale = 0.92 + beat.strength * 0.55 + proximity * 0.45 + actionScale;
   const brightness = 0.25 + beat.strength * 0.32 + proximity * 0.55;
-  const color = `hsl(${172 + beat.lane * 22} 92% 64%)`;
+  const actionHue =
+    beat.action === "tap"
+      ? 172
+      : beat.action === "hold"
+        ? 28
+        : beat.action === "step"
+          ? 194
+          : beat.action === "bridge"
+            ? 210
+            : 8;
+  const color = `hsl(${actionHue + beat.lane * 10} 92% 64%)`;
 
   return (
     <group
@@ -639,6 +792,7 @@ function Track({
   const trackWindow = createTrackWindow(snapshot.time, level);
   const cueBeats = level ? getVisibleBeats(level.beats, snapshot.time) : [];
   const obstacles = level ? getVisibleObstacles(level.obstacles, snapshot.time) : [];
+  const lavaZones = level ? getVisibleLavaZones(level.lavaZones, snapshot.time) : [];
   const trackMarkers = createMarkerPositions(trackWindow.startX, trackWindow.endX);
   const edgePylons = createPylonPositions(trackWindow.startX, trackWindow.endX);
 
@@ -675,6 +829,10 @@ function Track({
           roughness={0.9}
         />
       </mesh>
+
+      {lavaZones.map((zone) => (
+        <LavaPool key={`${zone.startTime}-${zone.endTime}`} zone={zone} />
+      ))}
 
       {LANE_OFFSETS.map((lane) => (
         <mesh key={lane} position={[trackWindow.centerX, 0.04, lane]}>

@@ -13,7 +13,7 @@ import {
   RUN_SPEED,
 } from "./constants";
 import { RhythmAudioEngine } from "./audioEngine";
-import type { AudioFrame, GameSnapshot, GameStatus, LevelData, Obstacle } from "./types";
+import type { AudioFrame, BeatPoint, GameSnapshot, GameStatus, LavaZone, LevelData, Obstacle } from "./types";
 
 interface RuntimeState {
   status: GameStatus;
@@ -39,6 +39,10 @@ const IDLE_AUDIO: AudioFrame = {
   treble: 0.05,
   overall: 0.08,
 };
+
+const BEAT_EARLY_WINDOW = 0.12;
+const BEAT_LATE_WINDOW = 0.085;
+const LAVA_SURFACE_Y = 0.22;
 
 function createRuntimeState(status: GameStatus): RuntimeState {
   return {
@@ -82,20 +86,45 @@ function sampleObstacleHeight(obstacle: Obstacle, relativeX: number) {
   return obstacle.height * triangle;
 }
 
+function isOverLava(lavaZones: LavaZone[], time: number) {
+  for (const zone of lavaZones) {
+    if (time < zone.startTime) {
+      return false;
+    }
+
+    if (time <= zone.endTime) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function resolvePlayerCollisions(
   obstacles: Obstacle[],
+  lavaZones: LavaZone[],
   time: number,
   previousY: number,
   nextY: number,
   nextVelocity: number,
 ): CollisionResult {
+  const overLava = isOverLava(lavaZones, time);
   const bottomOffset = PLAYER_RADIUS * 0.84;
   const topOffset = PLAYER_RADIUS * 0.72;
   const previousBottom = previousY - bottomOffset;
   const playerBottom = nextY - bottomOffset;
   const playerTop = nextY + topOffset;
-  let supportY = GROUND_Y;
-  let grounded = nextY <= GROUND_Y;
+  let supportY = overLava ? Number.NEGATIVE_INFINITY : GROUND_Y;
+  let grounded = !overLava && nextY <= GROUND_Y;
+
+  if (overLava && playerBottom < LAVA_SURFACE_Y) {
+    return {
+      crashed: true,
+      grounded: false,
+      playerY: nextY,
+      playerVelocity: nextVelocity,
+    };
+  }
 
   for (const obstacle of obstacles) {
     const relativeX = (obstacle.time - time) * RUN_SPEED;
@@ -190,6 +219,16 @@ function createIdleAudio(now: number, level: LevelData | null, runtime: RuntimeS
   };
 }
 
+function advanceCueIndex(cues: BeatPoint[], time: number, currentIndex: number) {
+  let nextIndex = currentIndex;
+
+  while (nextIndex < cues.length && cues[nextIndex].time < time - BEAT_LATE_WINDOW) {
+    nextIndex += 1;
+  }
+
+  return nextIndex;
+}
+
 export function useRhythmGame(audioUrl: string) {
   const initialRuntime = createRuntimeState("loading");
   const initialSnapshot = buildSnapshot(initialRuntime, null, IDLE_AUDIO);
@@ -206,6 +245,9 @@ export function useRhythmGame(audioUrl: string) {
   const jumpHeldRef = useRef(false);
   const jumpHoldTimeRef = useRef(0);
   const coyoteTimeRef = useRef(0);
+  const nextCueIndexRef = useRef(0);
+  const pendingCueIndexRef = useRef<number | null>(null);
+  const pendingCueTimeRef = useRef<number | null>(null);
 
   const commitSnapshot = (audio: AudioFrame, forceUi = false) => {
     const nextSnapshot = buildSnapshot(runtimeRef.current, levelRef.current, audio);
@@ -241,6 +283,9 @@ export function useRhythmGame(audioUrl: string) {
     snapshotRef.current = loadingSnapshot;
     uiSnapshotRef.current = loadingSnapshot;
     lastUiCommitRef.current = performance.now();
+    nextCueIndexRef.current = 0;
+    pendingCueIndexRef.current = null;
+    pendingCueTimeRef.current = null;
     setLevel(null);
     setError(null);
     setSnapshot(loadingSnapshot);
@@ -294,9 +339,9 @@ export function useRhythmGame(audioUrl: string) {
     try {
       await engine.start(0);
 
-      runtimeRef.current = {
-        ...previousRuntime,
-        status: "playing",
+        runtimeRef.current = {
+          ...previousRuntime,
+          status: "playing",
         time: 0,
         playerY: GROUND_Y,
         playerVelocity: 0,
@@ -307,6 +352,9 @@ export function useRhythmGame(audioUrl: string) {
       jumpHeldRef.current = false;
       jumpHoldTimeRef.current = 0;
       coyoteTimeRef.current = COYOTE_TIME;
+      nextCueIndexRef.current = 0;
+      pendingCueIndexRef.current = null;
+      pendingCueTimeRef.current = null;
       setError(null);
       commitSnapshot({
         bass: 0.12,
@@ -337,7 +385,29 @@ export function useRhythmGame(audioUrl: string) {
       return;
     }
 
-    jumpBufferRef.current = JUMP_BUFFER_TIME;
+    const currentLevel = levelRef.current;
+
+    if (!currentLevel) {
+      return;
+    }
+
+    const cueIndex = advanceCueIndex(currentLevel.beats, runtime.time, nextCueIndexRef.current);
+    nextCueIndexRef.current = cueIndex;
+    const cue = currentLevel.beats[cueIndex];
+
+    if (!cue) {
+      return;
+    }
+
+    const timeUntilCue = cue.time - runtime.time;
+
+    if (timeUntilCue < -BEAT_LATE_WINDOW || timeUntilCue > BEAT_EARLY_WINDOW) {
+      return;
+    }
+
+    pendingCueIndexRef.current = cueIndex;
+    pendingCueTimeRef.current = cue.time;
+    jumpBufferRef.current = Math.max(JUMP_BUFFER_TIME, timeUntilCue + BEAT_LATE_WINDOW);
   });
 
   const releaseJump = useEffectEvent(() => {
@@ -431,12 +501,27 @@ export function useRhythmGame(audioUrl: string) {
         runtime.time = engine.getCurrentTime();
         runtime.crashFlash = Math.max(0, runtime.crashFlash - delta * 1.3);
         jumpBufferRef.current = Math.max(0, jumpBufferRef.current - delta);
+        nextCueIndexRef.current = advanceCueIndex(currentLevel.beats, runtime.time, nextCueIndexRef.current);
+
+        if (
+          pendingCueIndexRef.current !== null &&
+          pendingCueIndexRef.current < nextCueIndexRef.current
+        ) {
+          pendingCueIndexRef.current = null;
+          pendingCueTimeRef.current = null;
+        }
+
         coyoteTimeRef.current = runtime.grounded
           ? COYOTE_TIME
           : Math.max(0, coyoteTimeRef.current - delta);
         const previousY = runtime.playerY;
-
-        const shouldJump = (runtime.grounded || coyoteTimeRef.current > 0) && jumpBufferRef.current > 0;
+        const pendingCueTime = pendingCueTimeRef.current;
+        const shouldJump =
+          (runtime.grounded || coyoteTimeRef.current > 0) &&
+          jumpBufferRef.current > 0 &&
+          pendingCueTime !== null &&
+          runtime.time >= pendingCueTime - 0.006 &&
+          runtime.time <= pendingCueTime + BEAT_LATE_WINDOW;
 
         if (shouldJump) {
           runtime.grounded = false;
@@ -444,6 +529,17 @@ export function useRhythmGame(audioUrl: string) {
           jumpBufferRef.current = 0;
           jumpHoldTimeRef.current = MAX_HOLD_JUMP_TIME;
           coyoteTimeRef.current = 0;
+          nextCueIndexRef.current = Math.max(nextCueIndexRef.current, (pendingCueIndexRef.current ?? 0) + 1);
+          pendingCueIndexRef.current = null;
+          pendingCueTimeRef.current = null;
+        } else if (
+          pendingCueTime !== null &&
+          runtime.time > pendingCueTime + BEAT_LATE_WINDOW
+        ) {
+          jumpBufferRef.current = 0;
+          nextCueIndexRef.current = Math.max(nextCueIndexRef.current, (pendingCueIndexRef.current ?? 0) + 1);
+          pendingCueIndexRef.current = null;
+          pendingCueTimeRef.current = null;
         }
 
         if (!runtime.grounded) {
@@ -470,6 +566,7 @@ export function useRhythmGame(audioUrl: string) {
 
         const collisionResult = resolvePlayerCollisions(
           currentLevel.obstacles,
+          currentLevel.lavaZones,
           runtime.time,
           previousY,
           runtime.playerY,
@@ -491,10 +588,14 @@ export function useRhythmGame(audioUrl: string) {
           runtime.status = "crashed";
           runtime.crashFlash = 1;
           runtime.deaths += 1;
+          pendingCueIndexRef.current = null;
+          pendingCueTimeRef.current = null;
           engine.stop();
         } else if (runtime.time >= currentLevel.duration - 0.08) {
           runtime.status = "finished";
           runtime.time = currentLevel.duration;
+          pendingCueIndexRef.current = null;
+          pendingCueTimeRef.current = null;
           engine.stop();
         }
 
