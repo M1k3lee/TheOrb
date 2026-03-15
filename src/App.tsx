@@ -85,6 +85,30 @@ export default function App() {
             action: () => void restartGame(),
           }
         : null;
+  const handleFullscreenToggle = () => {
+    const stage = stageRef.current as FullscreenStageElement | null;
+    const fullscreenDocument = document as FullscreenDocument;
+
+    if (!stage) {
+      return;
+    }
+
+    if (isFullscreenTarget(stage)) {
+      if (document.fullscreenElement) {
+        void document.exitFullscreen();
+      } else {
+        void fullscreenDocument.webkitExitFullscreen?.();
+      }
+
+      return;
+    }
+
+    if (stage.requestFullscreen) {
+      void stage.requestFullscreen();
+    } else {
+      void stage.webkitRequestFullscreen?.();
+    }
+  };
 
   useEffect(() => {
     const stage = stageRef.current as FullscreenStageElement | null;
@@ -155,58 +179,49 @@ export default function App() {
             <RhythmRunnerScene level={level} snapshot={snapshot} snapshotRef={snapshotRef} />
           </div>
 
-          <div className="stage-overlay">
-            <div className="progress-panel">
-              <div className="progress-panel__meta">
-                <span>Perfect sync</span>
-                <span>{Math.round(snapshot.progress * 100)}%</span>
+          {!isFullscreen ? (
+            <div className="stage-overlay">
+              <div className="progress-panel">
+                <div className="progress-panel__meta">
+                  <span>Perfect sync</span>
+                  <span>{Math.round(snapshot.progress * 100)}%</span>
+                </div>
+                <div className="progress-rail">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${snapshot.progress * 100}%` }}
+                  />
+                </div>
               </div>
-              <div className="progress-rail">
-                <div
-                  className="progress-fill"
-                  style={{ width: `${snapshot.progress * 100}%` }}
-                />
+
+              <div className="overlay-footer">
+                <div className="hint-chip">Jump anytime. Perfect beat hits get the clean line.</div>
+                {fullscreenSupported ? (
+                  <button
+                    aria-pressed={isFullscreen}
+                    className="button button--ghost button--compact"
+                    data-ui-interactive="true"
+                    onClick={handleFullscreenToggle}
+                    type="button"
+                  >
+                    Fullscreen
+                  </button>
+                ) : null}
               </div>
             </div>
+          ) : null}
 
-            <div className="overlay-footer">
-              <div className="hint-chip">Jump anytime. Perfect beat hits get the clean line.</div>
-              {fullscreenSupported ? (
-                <button
-                  aria-pressed={isFullscreen}
-                  className="button button--ghost button--compact"
-                  data-ui-interactive="true"
-                  onClick={() => {
-                    const stage = stageRef.current as FullscreenStageElement | null;
-                    const fullscreenDocument = document as FullscreenDocument;
-
-                    if (!stage) {
-                      return;
-                    }
-
-                    if (isFullscreenTarget(stage)) {
-                      if (document.fullscreenElement) {
-                        void document.exitFullscreen();
-                      } else {
-                        void fullscreenDocument.webkitExitFullscreen?.();
-                      }
-
-                      return;
-                    }
-
-                    if (stage.requestFullscreen) {
-                      void stage.requestFullscreen();
-                    } else {
-                      void stage.webkitRequestFullscreen?.();
-                    }
-                  }}
-                  type="button"
-                >
-                  {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-                </button>
-              ) : null}
-            </div>
-          </div>
+          {isFullscreen && fullscreenSupported ? (
+            <button
+              aria-label="Exit fullscreen"
+              className="button button--ghost fullscreen-exit-button"
+              data-ui-interactive="true"
+              onClick={handleFullscreenToggle}
+              type="button"
+            >
+              Exit
+            </button>
+          ) : null}
         </section>
 
         <section className="status-dock">

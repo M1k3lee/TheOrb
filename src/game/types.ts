@@ -7,6 +7,22 @@ export type GameStatus =
   | "error";
 
 export type TrackId = "downboy" | "found-da" | "default";
+export type LevelSectionKind =
+  | "ground"
+  | "climb"
+  | "drop"
+  | "bridge"
+  | "gauntlet"
+  | "floating"
+  | "tower";
+export type LevelSectionTheme =
+  | "pulse"
+  | "solar"
+  | "forge"
+  | "void"
+  | "sky"
+  | "citadel"
+  | "prism";
 
 export interface BeatPoint {
   time: number;
@@ -33,6 +49,15 @@ export interface LavaZone {
   hue: number;
 }
 
+export interface LevelSection {
+  startTime: number;
+  endTime: number;
+  kind: LevelSectionKind;
+  theme: LevelSectionTheme;
+  intensity: number;
+  variant: number;
+}
+
 export interface CameraMoment {
   time: number;
   duration: number;
@@ -50,6 +75,7 @@ export interface LevelData {
   obstacles: Obstacle[];
   lavaZones: LavaZone[];
   cameraMoments: CameraMoment[];
+  sections: LevelSection[];
 }
 
 export interface AudioFrame {

@@ -14,6 +14,9 @@ import type {
   GameSnapshot,
   LavaZone,
   LevelData,
+  LevelSection,
+  LevelSectionKind,
+  LevelSectionTheme,
   Obstacle,
 } from "../game/types";
 
@@ -34,6 +37,9 @@ const BACKDROP_FRAGMENT_SHADER = `
   uniform float uMid;
   uniform float uTreble;
   uniform float uCrash;
+  uniform vec3 uDeep;
+  uniform vec3 uPrimary;
+  uniform vec3 uSecondary;
 
   float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -60,16 +66,13 @@ const BACKDROP_FRAGMENT_SHADER = `
     float ribbon = smoothstep(0.72 + uBass * 0.25, 0.02, abs(uv.y + flow + field * 0.35));
     float bloomBand = smoothstep(0.52, 0.0, length(uv - vec2(-0.25, 0.22 + uMid * 0.08)));
 
-    vec3 deep = vec3(0.015, 0.04, 0.08);
-    vec3 aqua = vec3(0.08, 0.92, 0.86);
-    vec3 ember = vec3(1.0, 0.48, 0.24);
-    vec3 glow = mix(aqua, ember, clamp(uv.x * 0.45 + uTreble * 0.5 + field * 0.1, 0.0, 1.0));
+    vec3 glow = mix(uPrimary, uSecondary, clamp(uv.x * 0.45 + uTreble * 0.5 + field * 0.1, 0.0, 1.0));
 
-    vec3 color = deep;
+    vec3 color = uDeep;
     color += ribbon * glow * (0.35 + uMid * 1.25);
-    color += bloomBand * vec3(0.12, 0.22, 0.34);
+    color += bloomBand * mix(uPrimary, uDeep, 0.72);
     color += field * 0.04;
-    color = mix(color, vec3(1.0, 0.28, 0.2), uCrash * 0.16);
+    color = mix(color, uSecondary, uCrash * 0.16);
 
     gl_FragColor = vec4(color, 0.96);
   }
@@ -117,6 +120,123 @@ const CUE_VIEW_BEHIND = 12;
 const MARKER_SPACING = 2.4;
 const PYLON_SPACING = 9.6;
 const TRAIL_COUNT = 5;
+const SECTION_VIEW_PADDING = 1.1;
+
+interface ThemePalette {
+  deep: string;
+  primary: string;
+  secondary: string;
+  fog: string;
+  trackBase: string;
+  trackGlow: string;
+  rail: string;
+  marker: string;
+  markerAccent: string;
+  pylon: string;
+  pylonAccent: string;
+  light: string;
+}
+
+const SECTION_PALETTES: Record<LevelSectionTheme, ThemePalette> = {
+  pulse: {
+    deep: "#06131c",
+    primary: "#64fff2",
+    secondary: "#ff9d52",
+    fog: "#07161f",
+    trackBase: "#08131c",
+    trackGlow: "#103238",
+    rail: "#74fff7",
+    marker: "#68fef4",
+    markerAccent: "#ff9a56",
+    pylon: "#7cfff7",
+    pylonAccent: "#ffb074",
+    light: "#61fff1",
+  },
+  solar: {
+    deep: "#160a0a",
+    primary: "#ffb057",
+    secondary: "#ffd86a",
+    fog: "#190c0e",
+    trackBase: "#1a0f0c",
+    trackGlow: "#482112",
+    rail: "#ffc875",
+    marker: "#ffb15a",
+    markerAccent: "#fff0a3",
+    pylon: "#ffcc7a",
+    pylonAccent: "#ffdca0",
+    light: "#ffb667",
+  },
+  forge: {
+    deep: "#170907",
+    primary: "#ff6a3d",
+    secondary: "#ffc054",
+    fog: "#1a0a08",
+    trackBase: "#160b09",
+    trackGlow: "#431a12",
+    rail: "#ff9054",
+    marker: "#ff7447",
+    markerAccent: "#ffd66b",
+    pylon: "#ff8d58",
+    pylonAccent: "#ffe08a",
+    light: "#ff8147",
+  },
+  void: {
+    deep: "#06071a",
+    primary: "#6684ff",
+    secondary: "#b26dff",
+    fog: "#080b1e",
+    trackBase: "#090d1a",
+    trackGlow: "#182146",
+    rail: "#7fa7ff",
+    marker: "#7b90ff",
+    markerAccent: "#b77aff",
+    pylon: "#9eb3ff",
+    pylonAccent: "#d38cff",
+    light: "#8da1ff",
+  },
+  sky: {
+    deep: "#071620",
+    primary: "#7bf2ff",
+    secondary: "#7ec5ff",
+    fog: "#081822",
+    trackBase: "#08141b",
+    trackGlow: "#13323f",
+    rail: "#84f3ff",
+    marker: "#79e8ff",
+    markerAccent: "#99c6ff",
+    pylon: "#8eefff",
+    pylonAccent: "#acd4ff",
+    light: "#7bdfff",
+  },
+  citadel: {
+    deep: "#10121f",
+    primary: "#6effd0",
+    secondary: "#9ee0ff",
+    fog: "#111424",
+    trackBase: "#0f1624",
+    trackGlow: "#1f354d",
+    rail: "#86ffdc",
+    marker: "#76ffd2",
+    markerAccent: "#93dfff",
+    pylon: "#98ffee",
+    pylonAccent: "#b2e6ff",
+    light: "#82ffe0",
+  },
+  prism: {
+    deep: "#10091a",
+    primary: "#ff8ce3",
+    secondary: "#6ce8ff",
+    fog: "#140b20",
+    trackBase: "#120d1c",
+    trackGlow: "#31204c",
+    rail: "#ffb7ef",
+    marker: "#ff93e5",
+    markerAccent: "#8ff0ff",
+    pylon: "#ffafea",
+    pylonAccent: "#9befff",
+    light: "#ff91e3",
+  },
+};
 
 type SnapshotRef = MutableRefObject<GameSnapshot>;
 
@@ -270,6 +390,94 @@ function createPylonPositions(startX: number, endX: number) {
   return positions;
 }
 
+function getSectionPalette(theme: LevelSectionTheme | null | undefined) {
+  if (!theme) {
+    return SECTION_PALETTES.pulse;
+  }
+
+  return SECTION_PALETTES[theme] ?? SECTION_PALETTES.pulse;
+}
+
+function getActiveSection(sections: LevelSection[], time: number) {
+  let fallback = sections[0] ?? null;
+
+  for (const section of sections) {
+    if (time < section.startTime) {
+      return fallback;
+    }
+
+    fallback = section;
+
+    if (time <= section.endTime) {
+      return section;
+    }
+  }
+
+  return sections[sections.length - 1] ?? fallback;
+}
+
+function getVisibleSections(sections: LevelSection[], currentTime: number) {
+  const startTime = Math.max(0, currentTime - TRACK_VIEW_BEHIND / RUN_SPEED - SECTION_VIEW_PADDING);
+  const endTime = currentTime + TRACK_VIEW_AHEAD / RUN_SPEED + SECTION_VIEW_PADDING;
+  const visible: LevelSection[] = [];
+
+  for (const section of sections) {
+    if (section.endTime < startTime) {
+      continue;
+    }
+
+    if (section.startTime > endTime) {
+      break;
+    }
+
+    visible.push(section);
+  }
+
+  return visible;
+}
+
+function getSectionForTrackX(sections: LevelSection[], x: number) {
+  return getActiveSection(sections, Math.max(0, x / RUN_SPEED));
+}
+
+function splitTrackSegmentsBySections(
+  segments: Array<{ centerX: number; length: number }>,
+  sections: LevelSection[],
+) {
+  const themedSegments: Array<{ centerX: number; length: number; section: LevelSection | null }> = [];
+
+  for (const segment of segments) {
+    const segmentStart = segment.centerX - segment.length * 0.5;
+    const segmentEnd = segment.centerX + segment.length * 0.5;
+    let cursor = segmentStart;
+
+    while (cursor < segmentEnd - 0.04) {
+      const activeSection = getSectionForTrackX(sections, cursor + 0.02);
+      const cappedEnd = activeSection
+        ? Math.min(segmentEnd, activeSection.endTime * RUN_SPEED)
+        : segmentEnd;
+      const nextCursor = Math.max(cursor + 0.08, cappedEnd);
+
+      themedSegments.push({
+        centerX: cursor + (nextCursor - cursor) * 0.5,
+        length: nextCursor - cursor,
+        section: activeSection,
+      });
+
+      cursor = nextCursor;
+    }
+  }
+
+  return themedSegments;
+}
+
+function createSectionOffsets(length: number, spacing: number) {
+  const count = Math.max(1, Math.min(9, Math.round(length / Math.max(6, spacing))));
+  const step = length / count;
+
+  return Array.from({ length: count }, (_, index) => -length * 0.5 + step * (index + 0.5));
+}
+
 function getActiveCameraMoment(cameraMoments: CameraMoment[], time: number) {
   for (let index = cameraMoments.length - 1; index >= 0; index -= 1) {
     const moment = cameraMoments[index];
@@ -411,21 +619,78 @@ function CameraRig({
   return null;
 }
 
-function Backdrop({ snapshotRef }: { snapshotRef: SnapshotRef }) {
-  const materialRef = useRef<THREE.ShaderMaterial>(null);
+function Atmosphere({
+  level,
+  snapshotRef,
+}: {
+  level: LevelData | null;
+  snapshotRef: SnapshotRef;
+}) {
+  const { scene } = useThree();
+  const fogColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.fog));
+  const targetFogColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.fog));
 
-  useFrame((state) => {
+  useFrame((_, delta) => {
     const snapshot = snapshotRef.current;
+    const activeSection = level ? getActiveSection(level.sections, snapshot.time) : null;
+    const palette = getSectionPalette(activeSection?.theme);
+
+    targetFogColorRef.current.set(palette.fog);
+    fogColorRef.current.lerp(targetFogColorRef.current, 1 - Math.exp(-delta * 2.4));
+
+    if (scene.background instanceof THREE.Color) {
+      scene.background.copy(fogColorRef.current);
+    } else {
+      scene.background = fogColorRef.current.clone();
+    }
+
+    if (scene.fog instanceof THREE.Fog) {
+      scene.fog.color.copy(fogColorRef.current);
+    }
+  });
+
+  return null;
+}
+
+function Backdrop({
+  level,
+  snapshotRef,
+}: {
+  level: LevelData | null;
+  snapshotRef: SnapshotRef;
+}) {
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
+  const deepColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.deep));
+  const primaryColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.primary));
+  const secondaryColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.secondary));
+  const targetDeepColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.deep));
+  const targetPrimaryColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.primary));
+  const targetSecondaryColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.secondary));
+
+  useFrame((state, delta) => {
+    const snapshot = snapshotRef.current;
+    const activeSection = level ? getActiveSection(level.sections, snapshot.time) : null;
+    const palette = getSectionPalette(activeSection?.theme);
+    const colorLerp = 1 - Math.exp(-delta * 2.8);
 
     if (!materialRef.current) {
       return;
     }
 
+    targetDeepColorRef.current.set(palette.deep);
+    targetPrimaryColorRef.current.set(palette.primary);
+    targetSecondaryColorRef.current.set(palette.secondary);
+    deepColorRef.current.lerp(targetDeepColorRef.current, colorLerp);
+    primaryColorRef.current.lerp(targetPrimaryColorRef.current, colorLerp);
+    secondaryColorRef.current.lerp(targetSecondaryColorRef.current, colorLerp);
     materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
     materialRef.current.uniforms.uBass.value = snapshot.audio.bass;
     materialRef.current.uniforms.uMid.value = snapshot.audio.mid;
     materialRef.current.uniforms.uTreble.value = snapshot.audio.treble;
     materialRef.current.uniforms.uCrash.value = snapshot.crashFlash;
+    materialRef.current.uniforms.uDeep.value.copy(deepColorRef.current);
+    materialRef.current.uniforms.uPrimary.value.copy(primaryColorRef.current);
+    materialRef.current.uniforms.uSecondary.value.copy(secondaryColorRef.current);
   });
 
   return (
@@ -443,6 +708,9 @@ function Backdrop({ snapshotRef }: { snapshotRef: SnapshotRef }) {
           uMid: { value: 0 },
           uTreble: { value: 0 },
           uCrash: { value: 0 },
+          uDeep: { value: new THREE.Color(SECTION_PALETTES.pulse.deep) },
+          uPrimary: { value: new THREE.Color(SECTION_PALETTES.pulse.primary) },
+          uSecondary: { value: new THREE.Color(SECTION_PALETTES.pulse.secondary) },
         }}
         vertexShader={BACKDROP_VERTEX_SHADER}
       />
@@ -450,10 +718,17 @@ function Backdrop({ snapshotRef }: { snapshotRef: SnapshotRef }) {
   );
 }
 
-function ParticleField({ snapshotRef }: { snapshotRef: SnapshotRef }) {
+function ParticleField({
+  level,
+  snapshotRef,
+}: {
+  level: LevelData | null;
+  snapshotRef: SnapshotRef;
+}) {
   const pointsRef = useRef<THREE.Points>(null);
   const materialRef = useRef<THREE.PointsMaterial>(null);
   const positionsRef = useRef<Float32Array | null>(null);
+  const targetColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.primary));
 
   if (!positionsRef.current) {
     const pointCount = 360;
@@ -471,6 +746,8 @@ function ParticleField({ snapshotRef }: { snapshotRef: SnapshotRef }) {
 
   useFrame((state, delta) => {
     const snapshot = snapshotRef.current;
+    const activeSection = level ? getActiveSection(level.sections, snapshot.time) : null;
+    const palette = getSectionPalette(activeSection?.theme);
 
     if (!pointsRef.current) {
       return;
@@ -484,7 +761,9 @@ function ParticleField({ snapshotRef }: { snapshotRef: SnapshotRef }) {
       return;
     }
 
-    materialRef.current.opacity = 0.54;
+    targetColorRef.current.set(palette.primary);
+    materialRef.current.color.lerp(targetColorRef.current, 1 - Math.exp(-delta * 4));
+    materialRef.current.opacity = 0.44 + (activeSection?.intensity ?? 0.4) * 0.16;
     materialRef.current.size = 0.12 + snapshot.audio.overall * 0.08;
   });
 
@@ -680,6 +959,8 @@ function LavaPool({ zone }: { zone: LavaZone }) {
   const materialRef = useRef<THREE.ShaderMaterial>(null);
   const length = Math.max(2, (zone.endTime - zone.startTime) * RUN_SPEED);
   const centerX = (zone.startTime + zone.endTime) * RUN_SPEED * 0.5;
+  const lavaGlowColor = `hsl(${zone.hue} 96% 58%)`;
+  const lavaLightColor = `hsl(${zone.hue + 18} 100% 66%)`;
 
   useFrame((state) => {
     if (!materialRef.current) {
@@ -693,14 +974,14 @@ function LavaPool({ zone }: { zone: LavaZone }) {
   return (
     <group position={[centerX, 0, 0]}>
       <pointLight
-        color="#ff7a24"
+        color={lavaGlowColor}
         distance={18 + length * 0.3}
         intensity={1.6 + zone.intensity * 2.2}
         position={[0, 0.45, 0]}
       />
       <mesh position={[0, -0.02, 0]}>
         <boxGeometry args={[length, 0.12, 8.5]} />
-        <meshStandardMaterial color="#090707" emissive="#120807" emissiveIntensity={0.18} roughness={1} />
+        <meshStandardMaterial color="#090707" emissive={lavaGlowColor} emissiveIntensity={0.12} roughness={1} />
       </mesh>
       <mesh position={[0, -0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[length, 7.8]} />
@@ -720,7 +1001,7 @@ function LavaPool({ zone }: { zone: LavaZone }) {
           <boxGeometry args={[length, 0.08, 0.16]} />
           <meshBasicMaterial
             blending={THREE.AdditiveBlending}
-            color="#ff9b42"
+            color={lavaLightColor}
             opacity={0.28 + zone.intensity * 0.16}
             transparent
           />
@@ -856,6 +1137,266 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
   );
 }
 
+function getSectionSpacing(kind: LevelSectionKind) {
+  if (kind === "gauntlet") {
+    return 11;
+  }
+
+  if (kind === "bridge") {
+    return 16;
+  }
+
+  if (kind === "tower") {
+    return 18;
+  }
+
+  return 14;
+}
+
+function SectionScenery({ section }: { section: LevelSection }) {
+  const palette = getSectionPalette(section.theme);
+  const startX = section.startTime * RUN_SPEED;
+  const endX = section.endTime * RUN_SPEED;
+  const length = Math.max(12, endX - startX);
+  const centerX = (startX + endX) * 0.5;
+  const offsets = createSectionOffsets(length, getSectionSpacing(section.kind));
+  const hazeOpacity = 0.04 + section.intensity * 0.04;
+  const accentOpacity = 0.12 + section.intensity * 0.14;
+
+  return (
+    <group position={[centerX, 0, 0]}>
+      <pointLight
+        color={palette.light}
+        distance={30 + length * 0.2}
+        intensity={0.42 + section.intensity * 0.9}
+        position={[0, 5.6 + section.variant * 0.5, -6]}
+      />
+      <mesh position={[0, 9 + section.variant * 0.8, -28]} rotation={[0.05, 0, 0]}>
+        <planeGeometry args={[Math.max(34, length * 0.68), 18]} />
+        <meshBasicMaterial
+          blending={THREE.AdditiveBlending}
+          color={palette.primary}
+          opacity={hazeOpacity}
+          transparent
+        />
+      </mesh>
+
+      {section.kind === "ground"
+        ? offsets.map((offset, index) => (
+            <group key={`${section.startTime}-ground-${offset}`} position={[offset, 0, 0]}>
+              {[-1, 1].map((sign) => (
+                <mesh
+                  key={sign}
+                  position={[0, 1.3 + (index % 2) * 0.35, sign * 6.2]}
+                  rotation={[0, sign * 0.32, 0]}
+                >
+                  <boxGeometry args={[0.34, 2.4 + (index % 3) * 0.45, 1.7]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={index % 2 === 0 ? palette.pylon : palette.pylonAccent}
+                    opacity={accentOpacity}
+                    transparent
+                  />
+                </mesh>
+              ))}
+            </group>
+          ))
+        : null}
+
+      {section.kind === "climb"
+        ? offsets.map((offset, index) => (
+            <group key={`${section.startTime}-climb-${offset}`} position={[offset, 0, 0]}>
+              {[-1, 1].map((sign) => (
+                <group key={sign} position={[0, 4.8 + (index % 3) * 0.55, sign * 6.2]}>
+                  <mesh rotation={[0.4, index * 0.35, sign * 0.24]}>
+                    <octahedronGeometry args={[0.94 + section.intensity * 0.45, 0]} />
+                    <meshStandardMaterial
+                      color={sign > 0 ? palette.primary : palette.secondary}
+                      emissive={sign > 0 ? palette.primary : palette.secondary}
+                      emissiveIntensity={1.2}
+                      metalness={0.18}
+                      roughness={0.24}
+                    />
+                  </mesh>
+                  <mesh position={[0, -2.8, 0]}>
+                    <boxGeometry args={[0.12, 4.8, 0.12]} />
+                    <meshBasicMaterial
+                      blending={THREE.AdditiveBlending}
+                      color={palette.rail}
+                      opacity={0.22}
+                      transparent
+                    />
+                  </mesh>
+                </group>
+              ))}
+            </group>
+          ))
+        : null}
+
+      {section.kind === "drop"
+        ? offsets.map((offset, index) => (
+            <group key={`${section.startTime}-drop-${offset}`} position={[offset, 0, 0]}>
+              {[-1, 1].map((sign) => (
+                <mesh
+                  key={sign}
+                  position={[0, 3.8 + (index % 2) * 0.7, sign * 6.9]}
+                  rotation={[0, 0, sign * 0.22]}
+                >
+                  <boxGeometry args={[0.26, 7.4 + (index % 3) * 1.2, 1.08]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={sign > 0 ? palette.primary : palette.secondary}
+                    opacity={accentOpacity}
+                    transparent
+                  />
+                </mesh>
+              ))}
+            </group>
+          ))
+        : null}
+
+      {section.kind === "bridge"
+        ? offsets.map((offset) => (
+            <group key={`${section.startTime}-bridge-${offset}`} position={[offset, 0, 0]}>
+              {[-1, 1].map((sign) => (
+                <mesh key={sign} position={[0, 2.7, sign * 4.9]}>
+                  <boxGeometry args={[0.2, 5.4, 0.2]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={palette.pylon}
+                    opacity={0.18 + section.intensity * 0.08}
+                    transparent
+                  />
+                </mesh>
+              ))}
+              <mesh position={[0, 5.35, 0]}>
+                <boxGeometry args={[0.2, 0.2, 9.8]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={palette.pylonAccent}
+                  opacity={0.16 + section.intensity * 0.08}
+                  transparent
+                />
+              </mesh>
+              <mesh position={[0, 3.2, 0]} rotation={[0, Math.PI / 2, 0]}>
+                <torusGeometry args={[4.95, 0.07, 10, 28]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={palette.secondary}
+                  opacity={0.12 + section.intensity * 0.08}
+                  transparent
+                />
+              </mesh>
+            </group>
+          ))
+        : null}
+
+      {section.kind === "gauntlet"
+        ? offsets.map((offset) => (
+            <group key={`${section.startTime}-gauntlet-${offset}`} position={[offset, 0, 0]}>
+              {[-1, 1].map((sign) => (
+                <mesh key={sign} position={[0, 2.35, sign * 3.95]}>
+                  <boxGeometry args={[0.22, 4.7, 0.22]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={palette.primary}
+                    opacity={0.18 + section.intensity * 0.08}
+                    transparent
+                  />
+                </mesh>
+              ))}
+              <mesh position={[0, 4.65, 0]}>
+                <boxGeometry args={[0.22, 0.22, 8.1]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={palette.secondary}
+                  opacity={0.18 + section.intensity * 0.08}
+                  transparent
+                />
+              </mesh>
+              <mesh position={[0, 2.25, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                <torusGeometry args={[4.05, 0.06, 10, 22]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={palette.markerAccent}
+                  opacity={0.12 + section.intensity * 0.08}
+                  transparent
+                />
+              </mesh>
+            </group>
+          ))
+        : null}
+
+      {section.kind === "floating"
+        ? offsets.map((offset, index) => (
+            <group key={`${section.startTime}-floating-${offset}`} position={[offset, 0, 0]}>
+              <mesh position={[0, 6.4 + (index % 2) * 0.7, -4.6 - (index % 3) * 0.6]} rotation={[0.28, index * 0.45, 0]}>
+                <octahedronGeometry args={[1.28 + section.intensity * 0.38, 0]} />
+                <meshStandardMaterial
+                  color={palette.secondary}
+                  emissive={palette.secondary}
+                  emissiveIntensity={1.1}
+                  metalness={0.12}
+                  roughness={0.2}
+                />
+              </mesh>
+              {[-1, 1].map((sign) => (
+                <mesh
+                  key={sign}
+                  position={[0, 4.6 + (index % 3) * 0.45, sign * 6.4]}
+                  rotation={[0.42, index * 0.3, sign * 0.28]}
+                >
+                  <dodecahedronGeometry args={[0.7 + section.intensity * 0.22, 0]} />
+                  <meshStandardMaterial
+                    color={palette.primary}
+                    emissive={palette.primary}
+                    emissiveIntensity={0.9}
+                    metalness={0.08}
+                    roughness={0.24}
+                  />
+                </mesh>
+              ))}
+            </group>
+          ))
+        : null}
+
+      {section.kind === "tower"
+        ? offsets.map((offset, index) => (
+            <group key={`${section.startTime}-tower-${offset}`} position={[offset, 0, 0]}>
+              {[-1, 1].map((sign) => {
+                const height = 4.8 + (index % 3) * 1.2 + section.variant * 0.5;
+
+                return (
+                  <group key={sign} position={[0, 0, sign * 6.35]}>
+                    <mesh position={[0, height * 0.5, 0]}>
+                      <boxGeometry args={[1.18, height, 1.18]} />
+                      <meshStandardMaterial
+                        color={sign > 0 ? palette.pylon : palette.pylonAccent}
+                        emissive={palette.trackGlow}
+                        emissiveIntensity={0.58}
+                        metalness={0.18}
+                        roughness={0.32}
+                      />
+                    </mesh>
+                    <mesh position={[0, height + 0.46, 0]}>
+                      <sphereGeometry args={[0.26, 16, 16]} />
+                      <meshBasicMaterial
+                        blending={THREE.AdditiveBlending}
+                        color={palette.light}
+                        opacity={0.3}
+                        transparent
+                      />
+                    </mesh>
+                  </group>
+                );
+              })}
+            </group>
+          ))
+        : null}
+    </group>
+  );
+}
+
 function Track({
   level,
   snapshot,
@@ -870,7 +1411,9 @@ function Track({
   const cueBeats = level ? getVisibleBeats(level.beats, snapshot.time) : [];
   const obstacles = level ? getVisibleObstacles(level.obstacles, snapshot.time) : [];
   const lavaZones = level ? getVisibleLavaZones(level.lavaZones, snapshot.time) : [];
+  const visibleSections = level ? getVisibleSections(level.sections, snapshot.time) : [];
   const trackSegments = createSafeTrackSegments(trackWindow.startX, trackWindow.endX, lavaZones);
+  const themedTrackSegments = splitTrackSegmentsBySections(trackSegments, visibleSections);
   const trackMarkers = createMarkerPositions(trackWindow.startX, trackWindow.endX);
   const edgePylons = createPylonPositions(trackWindow.startX, trackWindow.endX);
 
@@ -886,88 +1429,130 @@ function Track({
 
   return (
     <group ref={groupRef} position={[PLAYER_TRACK_X - snapshot.time * RUN_SPEED, 0, 0]}>
+      {visibleSections.map((section) => (
+        <SectionScenery
+          key={`${section.startTime}-${section.endTime}-${section.theme}-${section.kind}-${section.variant}`}
+          section={section}
+        />
+      ))}
+
       {lavaZones.map((zone) => (
         <LavaPool key={`${zone.startTime}-${zone.endTime}`} zone={zone} />
       ))}
 
-      {trackSegments.map((segment) => (
-        <mesh key={`track-${segment.centerX}`} position={[segment.centerX, -0.16, 0]}>
-          <boxGeometry args={[segment.length, 0.24, 9.2]} />
-          <meshStandardMaterial
-            color="#051018"
-            emissive="#0d2326"
-            emissiveIntensity={0.72 + snapshot.audio.overall * 0.4}
-            metalness={0.18}
-            roughness={0.6}
-          />
-        </mesh>
-      ))}
+      {themedTrackSegments.map((segment) => {
+        const palette = getSectionPalette(segment.section?.theme);
 
-      {trackSegments.map((segment) => (
-        <mesh key={`surface-${segment.centerX}`} position={[segment.centerX, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[segment.length, 10]} />
-          <meshStandardMaterial
-            color="#050c11"
-            emissive="#081419"
-            emissiveIntensity={0.42}
-            metalness={0.06}
-            roughness={0.9}
-          />
-        </mesh>
-      ))}
-
-      {trackSegments.map((segment) =>
-        LANE_OFFSETS.map((lane) => (
-          <mesh key={`${segment.centerX}-${lane}`} position={[segment.centerX, 0.04, lane]}>
-            <boxGeometry args={[segment.length, 0.04, 0.09]} />
-            <meshBasicMaterial
-              color="#7dfff4"
-              opacity={0.32 + snapshot.audio.bass * 0.2}
-              transparent
+        return (
+          <mesh key={`track-${segment.centerX}-${segment.section?.theme ?? "base"}`} position={[segment.centerX, -0.16, 0]}>
+            <boxGeometry args={[segment.length, 0.24, 9.2]} />
+            <meshStandardMaterial
+              color={palette.trackBase}
+              emissive={palette.trackGlow}
+              emissiveIntensity={0.62 + snapshot.audio.overall * 0.48}
+              metalness={0.18}
+              roughness={0.6}
             />
           </mesh>
-        )),
-      )}
+        );
+      })}
 
-      {trackSegments.map((segment) =>
-        EDGE_OFFSETS.map((edge) => (
-          <mesh key={`${segment.centerX}-${edge}`} position={[segment.centerX, 0.16, edge]}>
-            <boxGeometry args={[segment.length, 0.18, 0.12]} />
-            <meshBasicMaterial
-              color="#8dfdf5"
-              opacity={0.24 + snapshot.audio.mid * 0.12}
-              transparent
+      {themedTrackSegments.map((segment) => {
+        const palette = getSectionPalette(segment.section?.theme);
+
+        return (
+          <mesh
+            key={`surface-${segment.centerX}-${segment.section?.theme ?? "base"}`}
+            position={[segment.centerX, 0.02, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+          >
+            <planeGeometry args={[segment.length, 10]} />
+            <meshStandardMaterial
+              color={palette.deep}
+              emissive={palette.trackGlow}
+              emissiveIntensity={0.28 + (segment.section?.intensity ?? 0.4) * 0.26}
+              metalness={0.06}
+              roughness={0.9}
             />
           </mesh>
-        )),
-      )}
+        );
+      })}
+
+      {themedTrackSegments.map((segment) => {
+        const palette = getSectionPalette(segment.section?.theme);
+
+        return (
+          <group key={`lanes-${segment.centerX}-${segment.section?.theme ?? "base"}`}>
+            {LANE_OFFSETS.map((lane) => (
+              <mesh key={`${segment.centerX}-${lane}-${segment.section?.theme ?? "base"}-lane`} position={[segment.centerX, 0.04, lane]}>
+                <boxGeometry args={[segment.length, 0.04, 0.09]} />
+                <meshBasicMaterial
+                  color={palette.rail}
+                  opacity={0.26 + snapshot.audio.bass * 0.24}
+                  transparent
+                />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
+
+      {themedTrackSegments.map((segment) => {
+        const palette = getSectionPalette(segment.section?.theme);
+
+        return (
+          <group key={`edges-${segment.centerX}-${segment.section?.theme ?? "base"}`}>
+            {EDGE_OFFSETS.map((edge) => (
+              <mesh key={`${segment.centerX}-${edge}-${segment.section?.theme ?? "base"}-edge`} position={[segment.centerX, 0.16, edge]}>
+                <boxGeometry args={[segment.length, 0.18, 0.12]} />
+                <meshBasicMaterial
+                  color={palette.pylon}
+                  opacity={0.22 + snapshot.audio.mid * 0.14}
+                  transparent
+                />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
 
       {trackMarkers.map((markerX, index) => (
-        isXInsideLavaZone(lavaZones, markerX) ? null :
-        <mesh key={markerX} position={[markerX, 0.03, 0]}>
-          <boxGeometry args={[0.16, 0.03, 8.6]} />
-          <meshBasicMaterial
-            color={index % 4 === 0 ? "#ff9657" : "#66fef6"}
-            opacity={index % 4 === 0 ? 0.28 : 0.16}
-            transparent
-          />
-        </mesh>
-      ))}
+        isXInsideLavaZone(lavaZones, markerX) ? null : (() => {
+          const section = getSectionForTrackX(level?.sections ?? [], markerX);
+          const palette = getSectionPalette(section?.theme);
 
-      {edgePylons.map((pylonX, index) => (
-        <group key={pylonX} position={[pylonX, 0, 0]}>
-          {EDGE_OFFSETS.map((edge) => (
-            <mesh key={`${pylonX}-${edge}`} position={[0, 1.25 + (index % 2) * 0.2, edge - 0.25 * Math.sign(edge)]}>
-              <boxGeometry args={[0.18, 2.2, 0.18]} />
+          return (
+            <mesh key={markerX} position={[markerX, 0.03, 0]}>
+              <boxGeometry args={[0.16, 0.03, 8.6]} />
               <meshBasicMaterial
-                color={index % 3 === 0 ? "#ff944f" : "#69fff4"}
-                opacity={0.16}
+                color={index % 4 === 0 ? palette.markerAccent : palette.marker}
+                opacity={index % 4 === 0 ? 0.28 : 0.16}
                 transparent
               />
             </mesh>
-          ))}
-        </group>
+          );
+        })()
       ))}
+
+      {edgePylons.map((pylonX, index) => {
+        const section = getSectionForTrackX(level?.sections ?? [], pylonX);
+        const palette = getSectionPalette(section?.theme);
+
+        return (
+          <group key={pylonX} position={[pylonX, 0, 0]}>
+            {EDGE_OFFSETS.map((edge) => (
+              <mesh key={`${pylonX}-${edge}`} position={[0, 1.25 + (index % 2) * 0.2, edge - 0.25 * Math.sign(edge)]}>
+                <boxGeometry args={[0.18, 2.2, 0.18]} />
+                <meshBasicMaterial
+                  color={index % 3 === 0 ? palette.pylonAccent : palette.pylon}
+                  opacity={0.18}
+                  transparent
+                />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
 
       {cueBeats.map((beat) => (
         <BeatRing beat={beat} currentTime={snapshot.time} key={beat.time} />
@@ -1004,14 +1589,15 @@ function SceneContent({
 }) {
   return (
     <>
-      <color attach="background" args={["#04111b"]} />
-      <fog attach="fog" args={["#04111b", 18, 108]} />
+      <color attach="background" args={[SECTION_PALETTES.pulse.fog]} />
+      <fog attach="fog" args={[SECTION_PALETTES.pulse.fog, 18, 108]} />
+      <Atmosphere level={level} snapshotRef={snapshotRef} />
       <ambientLight intensity={0.44} />
       <directionalLight color="#f5ffe8" intensity={1.55} position={[8, 18, 12]} />
       <pointLight color="#ff8c4a" distance={32} intensity={3.1} position={[14, 4, -10]} />
       <CameraRig level={level} snapshotRef={snapshotRef} />
-      <Backdrop snapshotRef={snapshotRef} />
-      <ParticleField snapshotRef={snapshotRef} />
+      <Backdrop level={level} snapshotRef={snapshotRef} />
+      <ParticleField level={level} snapshotRef={snapshotRef} />
       <Track level={level} snapshot={snapshot} snapshotRef={snapshotRef} />
       <Orb snapshotRef={snapshotRef} />
       <mesh position={[PLAYER_TRACK_X, GROUND_Y - PLAYER_RADIUS - 0.72, 0]} rotation={[-Math.PI / 2, 0, 0]}>

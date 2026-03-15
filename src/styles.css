@@ -372,6 +372,23 @@ select {
   white-space: nowrap;
 }
 
+.fullscreen-exit-button {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  z-index: 3;
+  min-height: 38px;
+  padding: 0.42rem 0.82rem;
+  border-radius: 999px;
+  background: rgba(4, 14, 21, 0.68);
+  backdrop-filter: blur(14px);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+}
+
 .waveform-panel {
   padding: clamp(18px, 2vw, 28px);
   border-radius: 30px;
@@ -542,6 +559,12 @@ select {
   .button,
   .track-picker__select {
     min-height: 46px;
+  }
+
+  .fullscreen-exit-button {
+    min-height: 34px;
+    padding: 0.38rem 0.72rem;
+    font-size: 0.68rem;
   }
 
   .status-dock {

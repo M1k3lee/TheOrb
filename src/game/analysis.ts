@@ -14,6 +14,9 @@ import type {
   CameraMoment,
   LavaZone,
   LevelData,
+  LevelSection,
+  LevelSectionKind,
+  LevelSectionTheme,
   Obstacle,
   TrackId,
 } from "./types";
@@ -38,7 +41,7 @@ interface GeneratedBar {
 }
 
 type ObstacleToken = null | "tap" | "hold" | "step" | "bridge";
-type SectionType = "ground" | "climb" | "drop" | "bridge" | "gauntlet" | "floating" | "tower";
+type SectionType = LevelSectionKind;
 
 interface GroundPatternPhase {
   untilProgress: number;
@@ -211,6 +214,16 @@ const FOUND_DA_PROFILE: TrackProfile = {
   energyCameraStyles: ["hero", "sweep", "rear", "rush"],
 };
 
+const SECTION_THEME_POOLS: Record<SectionType, LevelSectionTheme[]> = {
+  ground: ["pulse", "solar"],
+  climb: ["prism", "citadel"],
+  drop: ["void", "solar"],
+  bridge: ["sky", "pulse"],
+  gauntlet: ["forge", "void"],
+  floating: ["sky", "prism"],
+  tower: ["citadel", "forge"],
+};
+
 function getTrackProfile(trackId: TrackId): TrackProfile {
   if (trackId === "found-da") {
     return FOUND_DA_PROFILE;
@@ -221,6 +234,10 @@ function getTrackProfile(trackId: TrackId): TrackProfile {
   }
 
   return DOWNBOY_PROFILE;
+}
+
+function getTrackThemeOffset(profile: TrackProfile) {
+  return profile.id === "found-da" ? 1 : 0;
 }
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -1255,14 +1272,123 @@ function chooseSectionType(
   return candidate;
 }
 
+function chooseSectionTheme(
+  profile: TrackProfile,
+  sectionType: SectionType,
+  barIndex: number,
+  sectionProgress: number,
+  barEnergy: number,
+  recentThemes: LevelSectionTheme[],
+) {
+  const themePool = SECTION_THEME_POOLS[sectionType] ?? ["pulse"];
+  const seed =
+    barIndex +
+    Math.round(sectionProgress * 9) +
+    Math.round(barEnergy * 12) +
+    getTrackThemeOffset(profile);
+  let candidate = themePool[seed % themePool.length] ?? themePool[0] ?? "pulse";
+
+  if (themePool.length > 1 && recentThemes[recentThemes.length - 1] === candidate) {
+    candidate = themePool[(seed + 1) % themePool.length] ?? candidate;
+  }
+
+  return candidate;
+}
+
+function createLevelSection(
+  barBeats: GridBeat[],
+  duration: number,
+  kind: SectionType,
+  theme: LevelSectionTheme,
+  intensity: number,
+  variant: number,
+): LevelSection {
+  const firstBeat = barBeats[0];
+  const secondBeat = barBeats[1] ?? firstBeat;
+  const lastBeat = barBeats[barBeats.length - 1] ?? firstBeat;
+  const fallbackGap = Math.max(0.42, (lastBeat.time - firstBeat.time) / Math.max(1, barBeats.length - 1));
+  const beatGap = Math.max(fallbackGap, secondBeat.time - firstBeat.time || 0);
+
+  return {
+    startTime: clamp(firstBeat.time - beatGap * 0.5, 0, duration),
+    endTime: clamp(lastBeat.time + beatGap * 0.95, 0, duration),
+    kind,
+    theme,
+    intensity: clamp(intensity, 0.38, 1),
+    variant,
+  };
+}
+
+function normalizeSections(sections: LevelSection[], duration: number) {
+  const merged: LevelSection[] = [];
+
+  for (const section of [...sections]
+    .map((item) => ({
+      ...item,
+      startTime: clamp(item.startTime, 0, duration),
+      endTime: clamp(item.endTime, 0, duration),
+    }))
+    .filter((item) => item.endTime - item.startTime > 0.24)
+    .sort((left, right) => left.startTime - right.startTime)) {
+    const previous = merged[merged.length - 1];
+
+    if (
+      previous &&
+      previous.kind === section.kind &&
+      previous.theme === section.theme &&
+      previous.variant === section.variant &&
+      section.startTime <= previous.endTime + 0.12
+    ) {
+      previous.endTime = Math.max(previous.endTime, section.endTime);
+      previous.intensity = clamp((previous.intensity + section.intensity) * 0.5, 0.38, 1);
+      continue;
+    }
+
+    merged.push({ ...section });
+  }
+
+  if (merged.length === 0) {
+    return [
+      {
+        startTime: 0,
+        endTime: duration,
+        kind: "ground",
+        theme: "pulse",
+        intensity: 0.5,
+        variant: 0,
+      },
+    ] satisfies LevelSection[];
+  }
+
+  merged[0].startTime = 0;
+  merged[merged.length - 1].endTime = duration;
+
+  for (let index = 0; index < merged.length - 1; index += 1) {
+    const current = merged[index];
+    const next = merged[index + 1];
+    const midpoint = clamp(
+      (current.endTime + next.startTime) * 0.5,
+      current.startTime + 0.18,
+      next.endTime - 0.18,
+    );
+
+    current.endTime = midpoint;
+    next.startTime = midpoint;
+  }
+
+  return merged.filter((section) => section.endTime - section.startTime > 0.24);
+}
+
 function buildLevelLayout(gridBeats: GridBeat[], duration: number, trackId: TrackId) {
   const profile = getTrackProfile(trackId);
   const cues: BeatPoint[] = [];
   const obstacles: Obstacle[] = [];
   const lavaZones: LavaZone[] = [];
   const cameraMoments: CameraMoment[] = [];
+  const sections: LevelSection[] = [];
   let previousBarEnergy = 0.4;
   const recentSections: SectionType[] = [];
+  const recentThemes: LevelSectionTheme[] = [];
 
   for (let barStart = 0; barStart < gridBeats.length; barStart += BAR_BEAT_COUNT) {
     const barBeats = gridBeats.slice(barStart, barStart + BAR_BEAT_COUNT);
@@ -1284,7 +1410,18 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number, trackId: Trac
       previousBarEnergy,
       recentSections,
     );
+    const sectionTheme = chooseSectionTheme(
+      profile,
+      sectionType,
+      barIndex,
+      sectionProgress,
+      barEnergy,
+      recentThemes,
+    );
     const useLava = sectionProgress >= sectionPhase.lavaFloor && sectionType !== "ground";
+    const sectionVariant =
+      (barIndex + Math.round(barEnergy * 10) + Math.round(sectionProgress * 12) + getTrackThemeOffset(profile)) %
+      3;
     const generatedBar =
       sectionType === "climb"
         ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy, useLava)
@@ -1312,15 +1449,30 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number, trackId: Trac
     obstacles.push(...generatedBar.obstacles);
     lavaZones.push(...generatedBar.lavaZones);
     cameraMoments.push(...generatedBar.cameraMoments);
+    sections.push(
+      createLevelSection(
+        barBeats,
+        duration,
+        sectionType,
+        sectionTheme,
+        barEnergy * 0.72 + sectionProgress * 0.16 + (useLava ? 0.08 : 0),
+        sectionVariant,
+      ),
+    );
 
     if (energyMoment) {
       cameraMoments.push(energyMoment);
     }
 
     recentSections.push(sectionType);
+    recentThemes.push(sectionTheme);
 
     if (recentSections.length > 3) {
       recentSections.shift();
+    }
+
+    if (recentThemes.length > 3) {
+      recentThemes.shift();
     }
 
     previousBarEnergy = barEnergy;
@@ -1331,6 +1483,7 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number, trackId: Trac
     obstacles: normalizeObstacles(obstacles, duration),
     lavaZones: normalizeLavaZones(lavaZones, duration),
     cameraMoments: normalizeCameraMoments(cameraMoments),
+    sections: normalizeSections(sections, duration),
   };
 }
 
@@ -1710,5 +1863,6 @@ export function analyzeAudioBuffer(buffer: AudioBuffer, trackId: TrackId = "defa
     obstacles: repairedLayout.obstacles,
     lavaZones: repairedLayout.lavaZones,
     cameraMoments: layout.cameraMoments,
+    sections: layout.sections,
   };
 }
