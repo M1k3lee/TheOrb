@@ -13,7 +13,16 @@ import {
   RUN_SPEED,
 } from "./constants";
 import { RhythmAudioEngine } from "./audioEngine";
-import type { AudioFrame, BeatPoint, GameSnapshot, GameStatus, LavaZone, LevelData, Obstacle } from "./types";
+import type {
+  AudioFrame,
+  BeatPoint,
+  GameSnapshot,
+  GameStatus,
+  LavaZone,
+  LevelData,
+  Obstacle,
+  TrackId,
+} from "./types";
 
 interface RuntimeState {
   status: GameStatus;
@@ -258,7 +267,7 @@ function findNearestCue(cues: BeatPoint[], time: number, currentIndex: number) {
     : { cue: nextCue, index: nextIndex, delta: nextCue.time - time };
 }
 
-export function useRhythmGame(audioUrl: string) {
+export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
   const initialRuntime = createRuntimeState("loading");
   const initialSnapshot = buildSnapshot(initialRuntime, null, IDLE_AUDIO);
   const [level, setLevel] = useState<LevelData | null>(null);
@@ -325,7 +334,7 @@ export function useRhythmGame(audioUrl: string) {
 
     void (async () => {
       try {
-        const analyzedLevel = await engine.load(audioUrl);
+        const analyzedLevel = await engine.load(audioUrl, trackId);
 
         if (!active) {
           return;
@@ -358,7 +367,7 @@ export function useRhythmGame(audioUrl: string) {
         engineRef.current = null;
       }
     };
-  }, [audioUrl]);
+  }, [audioUrl, trackId]);
 
   const launchRun = useEffectEvent(async () => {
     const engine = engineRef.current;

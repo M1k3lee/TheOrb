@@ -1,5 +1,5 @@
 import { analyzeAudioBuffer } from "./analysis";
-import type { AudioFrame, LevelData } from "./types";
+import type { AudioFrame, LevelData, TrackId } from "./types";
 
 const EMPTY_AUDIO_FRAME: AudioFrame = {
   bass: 0,
@@ -66,7 +66,7 @@ export class RhythmAudioEngine {
   private stoppedAt = 0;
   private startRequestId = 0;
 
-  async load(audioUrl: string): Promise<LevelData> {
+  async load(audioUrl: string, trackId: TrackId = "default"): Promise<LevelData> {
     this.context = this.context ?? new AudioContext();
     const audioData = await fetchAudioData(audioUrl);
     this.buffer = await this.context.decodeAudioData(audioData.slice(0));
@@ -78,19 +78,20 @@ export class RhythmAudioEngine {
     this.gainNode.gain.value = 0.94;
     this.gainNode.connect(this.analyser);
     this.analyser.connect(this.context.destination);
-    const cachedLevel = levelCache.get(audioUrl);
+    const levelCacheKey = `${trackId}:${audioUrl}`;
+    const cachedLevel = levelCache.get(levelCacheKey);
 
     if (cachedLevel) {
       return cachedLevel;
     }
 
-    const levelPromise = Promise.resolve(analyzeAudioBuffer(this.buffer));
-    levelCache.set(audioUrl, levelPromise);
+    const levelPromise = Promise.resolve(analyzeAudioBuffer(this.buffer, trackId));
+    levelCache.set(levelCacheKey, levelPromise);
 
     try {
       return await levelPromise;
     } catch (error) {
-      levelCache.delete(audioUrl);
+      levelCache.delete(levelCacheKey);
       throw error;
     }
   }

@@ -9,7 +9,14 @@ import {
   PLAYER_RADIUS,
   RUN_SPEED,
 } from "./constants";
-import type { BeatPoint, CameraMoment, LavaZone, LevelData, Obstacle } from "./types";
+import type {
+  BeatPoint,
+  CameraMoment,
+  LavaZone,
+  LevelData,
+  Obstacle,
+  TrackId,
+} from "./types";
 
 const WAVEFORM_BAR_COUNT = 240;
 const ENERGY_SAMPLE_COUNT = 320;
@@ -31,6 +38,190 @@ interface GeneratedBar {
 }
 
 type ObstacleToken = null | "tap" | "hold" | "step" | "bridge";
+type SectionType = "ground" | "climb" | "drop" | "bridge" | "gauntlet" | "floating" | "tower";
+
+interface GroundPatternPhase {
+  untilProgress: number;
+  patterns: ObstacleToken[][];
+}
+
+interface SectionPhase {
+  untilProgress: number;
+  cycle: SectionType[];
+  accentCycle: SectionType[];
+  lavaFloor: number;
+  accentEnergy: number;
+}
+
+interface TrackProfile {
+  id: TrackId;
+  introGroundPatterns: ObstacleToken[][][];
+  groundPatternPhases: GroundPatternPhase[];
+  sectionPhases: SectionPhase[];
+  energyCameraStyles: CameraMoment["style"][];
+}
+
+const DOWNBOY_PROFILE: TrackProfile = {
+  id: "downboy",
+  introGroundPatterns: [
+    [
+      [null, "tap", null, null, "tap", null, "step", null],
+      [null, "tap", null, "tap", null, null, "step", null],
+    ],
+    [
+      ["tap", null, "tap", null, "step", null, "bridge", null],
+      [null, "tap", "step", null, "tap", null, "bridge", null],
+    ],
+    [
+      ["tap", null, "step", null, "tap", null, "hold", null],
+      [null, "tap", "step", null, "bridge", null, "tap", null],
+    ],
+  ],
+  groundPatternPhases: [
+    {
+      untilProgress: 0.24,
+      patterns: [
+        ["tap", null, "step", null, "tap", null, "bridge", null],
+        [null, "tap", "step", null, "tap", null, "step", null],
+        ["tap", null, "tap", null, "step", null, "bridge", null],
+      ],
+    },
+    {
+      untilProgress: 0.7,
+      patterns: [
+        ["tap", null, "step", null, "hold", null, "bridge", null],
+        [null, "tap", "step", null, "hold", null, "step", null],
+        ["step", null, "tap", null, "hold", null, "bridge", null],
+      ],
+    },
+    {
+      untilProgress: 1.01,
+      patterns: [
+        ["tap", null, "hold", null, "step", null, "hold", null],
+        ["step", null, "tap", null, "hold", null, "bridge", null],
+        ["tap", null, "step", null, "hold", null, "hold", null],
+      ],
+    },
+  ],
+  sectionPhases: [
+    {
+      untilProgress: 0.2,
+      cycle: ["ground", "ground", "climb", "ground", "bridge"],
+      accentCycle: ["climb", "bridge"],
+      lavaFloor: 1,
+      accentEnergy: 0.72,
+    },
+    {
+      untilProgress: 0.48,
+      cycle: ["ground", "climb", "bridge", "ground", "drop"],
+      accentCycle: ["climb", "bridge", "tower"],
+      lavaFloor: 0.3,
+      accentEnergy: 0.7,
+    },
+    {
+      untilProgress: 0.78,
+      cycle: ["climb", "bridge", "drop", "ground", "tower"],
+      accentCycle: ["tower", "gauntlet", "bridge"],
+      lavaFloor: 0.36,
+      accentEnergy: 0.74,
+    },
+    {
+      untilProgress: 1.01,
+      cycle: ["tower", "gauntlet", "drop", "floating", "bridge"],
+      accentCycle: ["tower", "gauntlet", "floating"],
+      lavaFloor: 0.28,
+      accentEnergy: 0.76,
+    },
+  ],
+  energyCameraStyles: ["rear", "rush", "sweep", "hero"],
+};
+
+const FOUND_DA_PROFILE: TrackProfile = {
+  id: "found-da",
+  introGroundPatterns: [
+    [
+      [null, "tap", null, "step", null, "tap", null, "step"],
+      [null, "tap", null, null, "step", null, "tap", null],
+    ],
+    [
+      ["step", null, "tap", null, "step", null, "bridge", null],
+      [null, "tap", "step", null, "bridge", null, "tap", null],
+    ],
+    [
+      ["tap", null, "step", null, "bridge", null, "tap", null],
+      [null, "step", null, "tap", null, "step", null, "bridge"],
+    ],
+  ],
+  groundPatternPhases: [
+    {
+      untilProgress: 0.22,
+      patterns: [
+        ["tap", null, "step", null, "bridge", null, "tap", null],
+        [null, "tap", "step", null, "step", null, "bridge", null],
+        ["step", null, "tap", null, "bridge", null, "tap", null],
+      ],
+    },
+    {
+      untilProgress: 0.68,
+      patterns: [
+        ["step", null, "tap", null, "bridge", null, "hold", null],
+        [null, "tap", "bridge", null, "step", null, "hold", null],
+        ["tap", null, "step", null, "bridge", null, "step", null],
+      ],
+    },
+    {
+      untilProgress: 1.01,
+      patterns: [
+        ["bridge", null, "hold", null, "step", null, "hold", null],
+        ["step", null, "bridge", null, "hold", null, "tap", null],
+        ["tap", null, "bridge", null, "hold", null, "step", null],
+      ],
+    },
+  ],
+  sectionPhases: [
+    {
+      untilProgress: 0.18,
+      cycle: ["ground", "ground", "climb", "drop"],
+      accentCycle: ["climb"],
+      lavaFloor: 1,
+      accentEnergy: 0.7,
+    },
+    {
+      untilProgress: 0.42,
+      cycle: ["climb", "floating", "ground", "drop", "bridge"],
+      accentCycle: ["tower", "floating", "drop"],
+      lavaFloor: 0.34,
+      accentEnergy: 0.7,
+    },
+    {
+      untilProgress: 0.74,
+      cycle: ["tower", "drop", "climb", "bridge", "ground", "floating"],
+      accentCycle: ["tower", "gauntlet", "drop"],
+      lavaFloor: 0.26,
+      accentEnergy: 0.74,
+    },
+    {
+      untilProgress: 1.01,
+      cycle: ["tower", "gauntlet", "tower", "floating", "drop", "bridge"],
+      accentCycle: ["tower", "gauntlet", "floating"],
+      lavaFloor: 0.22,
+      accentEnergy: 0.76,
+    },
+  ],
+  energyCameraStyles: ["hero", "sweep", "rear", "rush"],
+};
+
+function getTrackProfile(trackId: TrackId): TrackProfile {
+  if (trackId === "found-da") {
+    return FOUND_DA_PROFILE;
+  }
+
+  if (trackId === "downboy") {
+    return DOWNBOY_PROFILE;
+  }
+
+  return DOWNBOY_PROFILE;
+}
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -396,58 +587,26 @@ function buildTokenObstacles(
   ];
 }
 
-function getGroundPatternPool(sectionProgress: number, barIndex: number) {
-  if (barIndex === 0) {
-    return [
-      [null, "tap", null, null, "tap", null, "step", null],
-      [null, "tap", null, "tap", null, null, "step", null],
-    ] satisfies ObstacleToken[][];
+function getGroundPatternPool(profile: TrackProfile, sectionProgress: number, barIndex: number) {
+  if (barIndex < profile.introGroundPatterns.length) {
+    return profile.introGroundPatterns[barIndex];
   }
 
-  if (barIndex === 1) {
-    return [
-      ["tap", null, "tap", null, "step", null, "tap", null],
-      [null, "tap", "step", null, "tap", null, "tap", null],
-    ] satisfies ObstacleToken[][];
-  }
-
-  if (barIndex === 2) {
-    return [
-      ["tap", null, "step", null, "tap", null, "bridge", null],
-      [null, "tap", null, "step", "tap", null, "bridge", null],
-    ] satisfies ObstacleToken[][];
-  }
-
-  if (sectionProgress < 0.28) {
-    return [
-      ["tap", null, "step", null, "tap", null, "bridge", null],
-      [null, "tap", "step", null, "tap", null, "step", null],
-      ["tap", null, "tap", null, "step", null, "bridge", null],
-    ] satisfies ObstacleToken[][];
-  }
-
-  if (sectionProgress < 0.72) {
-    return [
-      ["tap", null, "step", null, "hold", null, "bridge", null],
-      [null, "tap", "step", null, "hold", null, "step", null],
-      ["step", null, "tap", null, "hold", null, "bridge", null],
-    ] satisfies ObstacleToken[][];
-  }
-
-  return [
-    ["tap", null, "hold", null, "step", null, "hold", null],
-    ["step", null, "tap", null, "hold", null, "bridge", null],
-    ["tap", null, "step", null, "hold", null, "hold", null],
-  ] satisfies ObstacleToken[][];
+  return (
+    profile.groundPatternPhases.find((phase) => sectionProgress < phase.untilProgress)?.patterns ??
+    profile.groundPatternPhases[profile.groundPatternPhases.length - 1]?.patterns ??
+    [[]]
+  );
 }
 
 function buildGroundBar(
+  profile: TrackProfile,
   barBeats: GridBeat[],
   barIndex: number,
   sectionProgress: number,
   barEnergy: number,
 ) {
-  const patternPool = getGroundPatternPool(sectionProgress, barIndex);
+  const patternPool = getGroundPatternPool(profile, sectionProgress, barIndex);
   const pattern = patternPool[(barIndex + Math.round(barEnergy * 4)) % patternPool.length];
   const cues: BeatPoint[] = [];
   const obstacles: Obstacle[] = [];
@@ -501,17 +660,22 @@ function buildClimbBar(
   barEnergy: number,
   useLava: boolean,
 ) {
-  const cueOffsets = [0, 2, 4, 6];
+  const cueOffsets = [0, 1, 2, 3, 4];
   const topHeights = [
-    1.22,
-    clamp(1.66 + barEnergy * 0.16, 1.66, 1.92),
-    clamp(2.06 + barEnergy * 0.2, 2.06, 2.36),
-    1.26 + sectionProgress * 0.08,
+    1.24,
+    clamp(1.82 + barEnergy * 0.12, 1.82, 2.02),
+    clamp(2.34 + barEnergy * 0.15, 2.34, 2.58),
+    clamp(2.88 + sectionProgress * 0.16 + barEnergy * 0.1, 2.88, 3.24),
+    1.32 + sectionProgress * 0.06,
   ];
-  const widths = [3.9, 3.55, 3.35, 4.8];
-  const thicknesses = [1.22, 0.42, 0.42, 1.26];
+  const widths = [6.1, 5.6, 5.3, 5.1, 6.2];
+  const thicknesses = [1.24, 0.46, 0.42, 0.38, 1.24];
   const cues = cueOffsets.map((offset, index) =>
-    createCue(barBeats[offset], index === cueOffsets.length - 1 ? "step" : "climb", index - 1),
+    createCue(
+      barBeats[offset],
+      index === 0 || index === cueOffsets.length - 1 ? "step" : "climb",
+      index - 2,
+    ),
   );
   const obstacles = cueOffsets.map((offset, index) =>
     createPlatformBlock(
@@ -520,7 +684,7 @@ function buildClimbBar(
       widths[index],
       topHeights[index],
       thicknesses[index],
-      0.17 + index * 0.01,
+      0.14 + index * 0.006,
       164,
       0.64 + barEnergy * 0.18,
     ),
@@ -541,8 +705,8 @@ function buildClimbBar(
     lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
-        time: barBeats[1]?.time ?? barBeats[0].time,
-        duration: 0.9,
+        time: barBeats[2]?.time ?? barBeats[0].time,
+        duration: 1.0,
         strength: 0.74 + barEnergy * 0.16,
         style: "rear",
       },
@@ -556,17 +720,22 @@ function buildDropBar(
   barEnergy: number,
   useLava: boolean,
 ) {
-  const cueOffsets = [0, 2, 4, 6];
+  const cueOffsets = [0, 1, 2, 3, 4];
   const topHeights = [
-    clamp(2.1 + barEnergy * 0.16, 2.1, 2.36),
-    clamp(1.84 + barEnergy * 0.12, 1.84, 2.06),
-    1.48,
+    1.38,
+    clamp(2.48 + barEnergy * 0.14, 2.48, 2.72),
+    clamp(2.06 + barEnergy * 0.1, 2.06, 2.24),
+    1.62,
     1.22,
   ];
-  const widths = [3.3, 3.2, 3.55, 4.6];
-  const thicknesses = [0.42, 0.4, 0.38, 1.22];
+  const widths = [5.9, 5.0, 4.9, 5.2, 6.1];
+  const thicknesses = [1.08, 0.42, 0.4, 0.4, 1.22];
   const cues = cueOffsets.map((offset, index) =>
-    createCue(barBeats[offset], index < 2 ? "climb" : "step", 1 - index),
+    createCue(
+      barBeats[offset],
+      index === 1 ? "climb" : "step",
+      2 - index,
+    ),
   );
   const obstacles = cueOffsets.map((offset, index) =>
     createPlatformBlock(
@@ -575,7 +744,7 @@ function buildDropBar(
       widths[index],
       topHeights[index],
       thicknesses[index],
-      0.16 + index * 0.012,
+      0.14 + index * 0.006,
       202,
       0.54 + barEnergy * 0.16,
     ),
@@ -596,8 +765,8 @@ function buildDropBar(
     lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
-        time: barBeats[2]?.time ?? barBeats[0].time,
-        duration: 0.7,
+        time: barBeats[1]?.time ?? barBeats[0].time,
+        duration: 0.86,
         strength: 0.64 + barEnergy * 0.14,
         style: "hero",
       },
@@ -611,55 +780,54 @@ function buildBridgeBar(
   barEnergy: number,
   useLava: boolean,
 ) {
-  const cueOffsets = [1, 3, 5];
-  const topHeights = [1.4, 1.52, 1.24];
-  const widths = [5.25, 5.45, 4.9];
-  const thicknesses = [0.42, 0.42, 1.24];
+  const topHeights = [1.34, 1.94, 1.28];
+  const widths = [6.3, 5.4, 6.2];
+  const thicknesses = [1.12, 0.42, 1.18];
   const cues = [
-    createCue(barBeats[1], "bridge", 0),
-    createCue(barBeats[3], "tap", 1),
-    createCue(barBeats[5], "step", 2),
+    createCue(barBeats[0], "bridge", 0),
+    createCue(barBeats[1], "climb", 1),
+    createCue(barBeats[2], "tap", 2),
   ];
   const platformOne = createPlatformBlock(
-    barBeats[1],
-    barIndex * BAR_BEAT_COUNT + 1,
+    barBeats[0],
+    barIndex * BAR_BEAT_COUNT,
     widths[0],
     topHeights[0],
     thicknesses[0],
-    0.18,
+    0.14,
     188,
     0.58 + barEnergy * 0.18,
   );
   const platformTwo = createPlatformBlock(
-    barBeats[3],
-    barIndex * BAR_BEAT_COUNT + 3,
+    barBeats[1],
+    barIndex * BAR_BEAT_COUNT + 1,
     widths[1],
     topHeights[1],
     thicknesses[1],
-    0.18,
+    0.14,
     196,
     0.6 + barEnergy * 0.18,
   );
   const exitPlatform = createPlatformBlock(
-    barBeats[5],
-    barIndex * BAR_BEAT_COUNT + 5,
+    barBeats[2],
+    barIndex * BAR_BEAT_COUNT + 2,
     widths[2],
     topHeights[2],
     thicknesses[2],
-    0.16,
+    0.14,
     202,
     0.52 + barEnergy * 0.16,
   );
   const platformSpike = createPlatformSpike(
-    barBeats[3],
-    barIndex * BAR_BEAT_COUNT + 103,
+    barBeats[2],
+    barIndex * BAR_BEAT_COUNT + 102,
     1.22,
     0.96,
     1,
-    0.11,
+    0.08,
     16,
     0.72 + barEnergy * 0.16,
-    topHeights[1],
+    topHeights[1] - 0.02,
   );
   const obstacles = [
     platformOne,
@@ -683,8 +851,8 @@ function buildBridgeBar(
     lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
-        time: barBeats[3]?.time ?? barBeats[0].time,
-        duration: 0.72,
+        time: barBeats[1]?.time ?? barBeats[0].time,
+        duration: 0.82,
         strength: 0.66 + barEnergy * 0.12,
         style: "sweep",
       },
@@ -701,47 +869,57 @@ function buildGauntletBar(
   const platformOne = createPlatformBlock(
     barBeats[0],
     barIndex * BAR_BEAT_COUNT,
-    5.8,
-    1.56,
-    0.42,
-    0.16,
+    6.6,
+    1.42,
+    1.04,
+    0.14,
     172,
     0.62 + barEnergy * 0.18,
   );
-  const platformSpike = createPlatformSpike(
-    barBeats[2],
-    barIndex * BAR_BEAT_COUNT + 102,
-    1.28,
-    0.98,
-    1,
-    0.1,
-    14,
-    0.74 + barEnergy * 0.18,
-    1.56,
-  );
   const midStep = createPlatformBlock(
-    barBeats[4],
-    barIndex * BAR_BEAT_COUNT + 4,
-    3.1,
-    1.94,
+    barBeats[1],
+    barIndex * BAR_BEAT_COUNT + 1,
+    5.2,
+    2.46,
     0.38,
-    0.16,
+    0.14,
     184,
     0.56 + barEnergy * 0.16,
   );
+  const highStep = createPlatformBlock(
+    barBeats[2],
+    barIndex * BAR_BEAT_COUNT + 2,
+    5.0,
+    3.04,
+    0.36,
+    0.14,
+    190,
+    0.58 + barEnergy * 0.16,
+  );
+  const platformSpike = createPlatformSpike(
+    barBeats[3],
+    barIndex * BAR_BEAT_COUNT + 103,
+    1.24,
+    0.98,
+    1,
+    0.08,
+    14,
+    0.74 + barEnergy * 0.18,
+    3.04,
+  );
   const exitPlatform = createPlatformBlock(
-    barBeats[6],
-    barIndex * BAR_BEAT_COUNT + 6,
-    4.45,
+    barBeats[4],
+    barIndex * BAR_BEAT_COUNT + 4,
+    6.0,
     1.26,
     1.26,
-    0.16,
+    0.14,
     196,
     0.52 + barEnergy * 0.14,
   );
   const lavaZone = useLava
     ? createLavaZoneForObstacles(
-        [platformOne, midStep, exitPlatform],
+        [platformOne, midStep, highStep, exitPlatform],
         0.7 + barEnergy * 0.16,
         10 + ((barIndex * 5) % 26),
         0.08,
@@ -751,17 +929,17 @@ function buildGauntletBar(
 
   return {
     cues: [
-      createCue(barBeats[0], "bridge", 0),
-      createCue(barBeats[2], "tap", 1),
-      createCue(barBeats[4], "climb", 2),
-      createCue(barBeats[6], "step", 0),
+      createCue(barBeats[0], "step", 0),
+      createCue(barBeats[1], "climb", 1),
+      createCue(barBeats[2], "climb", 2),
+      createCue(barBeats[3], "tap", 1),
     ],
-    obstacles: [platformOne, platformSpike, midStep, exitPlatform],
+    obstacles: [platformOne, midStep, highStep, platformSpike, exitPlatform],
     lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
         time: barBeats[2]?.time ?? barBeats[0].time,
-        duration: 0.78,
+        duration: 0.92,
         strength: 0.72 + barEnergy * 0.14,
         style: "rush",
       },
@@ -775,10 +953,10 @@ function buildFloatingStepsBar(
   barEnergy: number,
   useLava: boolean,
 ) {
-  const cueOffsets = [0, 2, 4, 6];
-  const topHeights = [1.48, 1.92, 1.68, 1.24];
-  const widths = [2.9, 2.8, 2.9, 4.6];
-  const thicknesses = [0.36, 0.36, 0.36, 1.24];
+  const cueOffsets = [0, 1, 2, 3, 4];
+  const topHeights = [1.4, 2.04, 2.62, 2.18, 1.28];
+  const widths = [5.7, 5.0, 4.8, 4.9, 6.0];
+  const thicknesses = [1.04, 0.36, 0.34, 0.34, 1.18];
   const obstacles = cueOffsets.map((offset, index) =>
     createPlatformBlock(
       barBeats[offset],
@@ -786,7 +964,7 @@ function buildFloatingStepsBar(
       widths[index],
       topHeights[index],
       thicknesses[index],
-      0.16 + index * 0.01,
+      0.14 + index * 0.006,
       204,
       0.5 + barEnergy * 0.14,
     ),
@@ -803,14 +981,18 @@ function buildFloatingStepsBar(
 
   return {
     cues: cueOffsets.map((offset, index) =>
-      createCue(barBeats[offset], index === cueOffsets.length - 1 ? "step" : "climb", 1 - index),
+      createCue(
+        barBeats[offset],
+        index === 0 || index === cueOffsets.length - 1 ? "step" : "climb",
+        2 - index,
+      ),
     ),
     obstacles,
     lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
-        time: barBeats[4]?.time ?? barBeats[0].time,
-        duration: 0.68,
+        time: barBeats[2]?.time ?? barBeats[0].time,
+        duration: 0.82,
         strength: 0.62 + barEnergy * 0.12,
         style: "hero",
       },
@@ -818,20 +1000,105 @@ function buildFloatingStepsBar(
   } satisfies GeneratedBar;
 }
 
-function createEnergyCameraMoment(
+function buildTowerBar(
   barBeats: GridBeat[],
+  barIndex: number,
+  sectionProgress: number,
+  barEnergy: number,
+  useLava: boolean,
+) {
+  const cueOffsets = [0, 1, 2, 3, 4, 5];
+  const topHeights = [
+    1.26,
+    clamp(1.96 + barEnergy * 0.12, 1.96, 2.14),
+    clamp(2.52 + barEnergy * 0.14, 2.52, 2.72),
+    clamp(3.02 + sectionProgress * 0.18 + barEnergy * 0.1, 3.02, 3.32),
+    clamp(3.34 + sectionProgress * 0.2 + barEnergy * 0.1, 3.34, 3.58),
+    1.36,
+  ];
+  const widths = [6.2, 5.6, 5.2, 4.9, 4.7, 6.3];
+  const thicknesses = [1.22, 0.44, 0.4, 0.36, 0.34, 1.2];
+  const obstacles = cueOffsets.map((offset, index) =>
+    createPlatformBlock(
+      barBeats[offset],
+      barIndex * BAR_BEAT_COUNT + offset,
+      widths[index],
+      topHeights[index],
+      thicknesses[index],
+      0.14 + index * 0.004,
+      176,
+      0.56 + barEnergy * 0.16,
+    ),
+  );
+  const crestSpike = createPlatformSpike(
+    barBeats[5],
+    barIndex * BAR_BEAT_COUNT + 105,
+    1.16,
+    0.9,
+    1,
+    0.08,
+    16,
+    0.72 + barEnergy * 0.16,
+    topHeights[4] - 0.02,
+  );
+  const lavaZone = useLava
+    ? createLavaZoneForObstacles(
+        obstacles,
+        0.72 + barEnergy * 0.18,
+        14 + ((barIndex * 13) % 18),
+        0.1,
+        0.48,
+      )
+    : null;
+
+  return {
+    cues: cueOffsets.map((offset, index) =>
+      createCue(
+        barBeats[offset],
+        index === cueOffsets.length - 1 ? "tap" : index < 2 ? "step" : "climb",
+        2 - index,
+      ),
+    ),
+    obstacles: [...obstacles, crestSpike],
+    lavaZones: lavaZone ? [lavaZone] : [],
+    cameraMoments: [
+      {
+        time: barBeats[3]?.time ?? barBeats[0].time,
+        duration: 1.08,
+        strength: 0.72 + barEnergy * 0.14,
+        style: "rear",
+      },
+      {
+        time: barBeats[5]?.time ?? barBeats[4].time,
+        duration: 0.74,
+        strength: 0.7 + barEnergy * 0.12,
+        style: "rush",
+      },
+    ],
+  } satisfies GeneratedBar;
+}
+
+function createEnergyCameraMoment(
+  profile: TrackProfile,
+  barBeats: GridBeat[],
+  barIndex: number,
+  sectionProgress: number,
   currentEnergy: number,
   previousEnergy: number,
 ) {
-  if (currentEnergy < 0.72 || currentEnergy < previousEnergy + 0.08) {
+  const threshold = clamp(0.68 + sectionProgress * 0.1, 0.68, 0.8);
+
+  if (currentEnergy < threshold || currentEnergy < previousEnergy + 0.06) {
     return null;
   }
 
   return {
     time: barBeats[2]?.time ?? barBeats[0].time,
-    duration: 0.62,
+    duration: clamp(0.58 + sectionProgress * 0.24, 0.58, 0.86),
     strength: clamp(currentEnergy * 0.92, 0.68, 1),
-    style: currentEnergy > previousEnergy + 0.16 ? "rush" : "hero",
+    style:
+      profile.energyCameraStyles[(barIndex + Math.round(sectionProgress * 10)) % profile.energyCameraStyles.length] ??
+      "hero",
   } satisfies CameraMoment;
 }
 
@@ -937,12 +1204,65 @@ function normalizeCameraMoments(cameraMoments: CameraMoment[]) {
     .filter((moment, index, list) => index === 0 || moment.time - list[index - 1].time > 0.8);
 }
 
-function buildLevelLayout(gridBeats: GridBeat[], duration: number) {
+function getSectionPhase(profile: TrackProfile, sectionProgress: number) {
+  return (
+    profile.sectionPhases.find((phase) => sectionProgress < phase.untilProgress) ??
+    profile.sectionPhases[profile.sectionPhases.length - 1]
+  );
+}
+
+function chooseSectionType(
+  profile: TrackProfile,
+  barIndex: number,
+  sectionProgress: number,
+  barEnergy: number,
+  previousBarEnergy: number,
+  recentSections: SectionType[],
+) {
+  if (barIndex < 2) {
+    return "ground";
+  }
+
+  const phase = getSectionPhase(profile, sectionProgress);
+  const candidatePool =
+    phase.accentCycle.length > 0 && barEnergy >= phase.accentEnergy && barEnergy >= previousBarEnergy - 0.02
+      ? phase.accentCycle
+      : phase.cycle;
+  const seed = barIndex + Math.round(barEnergy * 8) + Math.round(sectionProgress * 5);
+  let candidate = candidatePool[seed % candidatePool.length] ?? "ground";
+
+  if (sectionProgress < 0.2 && (candidate === "gauntlet" || candidate === "tower")) {
+    candidate = "climb";
+  }
+
+  if (sectionProgress < 0.14 && candidate === "floating") {
+    candidate = "ground";
+  }
+
+  if (
+    candidate !== "ground" &&
+    recentSections.length >= 2 &&
+    recentSections.slice(-2).every((section) => section === candidate)
+  ) {
+    const fallbackPool = [...phase.cycle, ...phase.accentCycle];
+    const alternative = fallbackPool.find((section) => section !== candidate);
+
+    if (alternative) {
+      candidate = alternative;
+    }
+  }
+
+  return candidate;
+}
+
+function buildLevelLayout(gridBeats: GridBeat[], duration: number, trackId: TrackId) {
+  const profile = getTrackProfile(trackId);
   const cues: BeatPoint[] = [];
   const obstacles: Obstacle[] = [];
   const lavaZones: LavaZone[] = [];
   const cameraMoments: CameraMoment[] = [];
   let previousBarEnergy = 0.4;
+  const recentSections: SectionType[] = [];
 
   for (let barStart = 0; barStart < gridBeats.length; barStart += BAR_BEAT_COUNT) {
     const barBeats = gridBeats.slice(barStart, barStart + BAR_BEAT_COUNT);
@@ -955,25 +1275,38 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number) {
     const sectionProgress = barStart / Math.max(1, gridBeats.length - 1);
     const barEnergy =
       barBeats.reduce((total, beat) => total + beat.strength, 0) / Math.max(1, barBeats.length);
-    const useLava = sectionProgress > 0.18;
-    const forceLavaSetpiece = sectionProgress > 0.26 && sectionProgress < 0.86 && barIndex % 10 === 6;
-    const useClimb = !forceLavaSetpiece && barIndex > 2 && (barIndex % 9 === 3 || (barIndex % 7 === 1 && barEnergy > 0.66));
-    const useDrop = !forceLavaSetpiece && !useClimb && barIndex > 4 && (barIndex % 9 === 5 || (barIndex % 8 === 2 && sectionProgress > 0.24));
-    const useGauntlet = forceLavaSetpiece || (!useClimb && !useDrop && barIndex > 5 && (barIndex % 10 === 7 || (barEnergy > 0.74 && sectionProgress > 0.34)));
-    const useBridge = !useClimb && !useDrop && !useGauntlet && barIndex > 4 && (barIndex % 8 === 5 || (barEnergy > 0.76 && sectionProgress > 0.38));
-    const useFloatingSteps = !useClimb && !useDrop && !useGauntlet && !useBridge && barIndex > 6 && (barIndex % 11 === 9 || sectionProgress > 0.58);
-    const generatedBar = useClimb
-      ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy, useLava)
-      : useDrop
-        ? buildDropBar(barBeats, barIndex, barEnergy, useLava)
-        : useGauntlet
-          ? buildGauntletBar(barBeats, barIndex, barEnergy, true)
-          : useBridge
-            ? buildBridgeBar(barBeats, barIndex, barEnergy, useLava)
-            : useFloatingSteps
-              ? buildFloatingStepsBar(barBeats, barIndex, barEnergy, useLava)
-              : buildGroundBar(barBeats, barIndex, sectionProgress, barEnergy);
-    const energyMoment = createEnergyCameraMoment(barBeats, barEnergy, previousBarEnergy);
+    const sectionPhase = getSectionPhase(profile, sectionProgress);
+    const sectionType = chooseSectionType(
+      profile,
+      barIndex,
+      sectionProgress,
+      barEnergy,
+      previousBarEnergy,
+      recentSections,
+    );
+    const useLava = sectionProgress >= sectionPhase.lavaFloor && sectionType !== "ground";
+    const generatedBar =
+      sectionType === "climb"
+        ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy, useLava)
+        : sectionType === "drop"
+          ? buildDropBar(barBeats, barIndex, barEnergy, useLava)
+          : sectionType === "gauntlet"
+            ? buildGauntletBar(barBeats, barIndex, barEnergy, true)
+            : sectionType === "bridge"
+              ? buildBridgeBar(barBeats, barIndex, barEnergy, useLava)
+              : sectionType === "floating"
+                ? buildFloatingStepsBar(barBeats, barIndex, barEnergy, useLava)
+                : sectionType === "tower"
+                  ? buildTowerBar(barBeats, barIndex, sectionProgress, barEnergy, useLava)
+                  : buildGroundBar(profile, barBeats, barIndex, sectionProgress, barEnergy);
+    const energyMoment = createEnergyCameraMoment(
+      profile,
+      barBeats,
+      barIndex,
+      sectionProgress,
+      barEnergy,
+      previousBarEnergy,
+    );
 
     cues.push(...generatedBar.cues);
     obstacles.push(...generatedBar.obstacles);
@@ -982,6 +1315,12 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number) {
 
     if (energyMoment) {
       cameraMoments.push(energyMoment);
+    }
+
+    recentSections.push(sectionType);
+
+    if (recentSections.length > 3) {
+      recentSections.shift();
     }
 
     previousBarEnergy = barEnergy;
@@ -1317,7 +1656,7 @@ function repairLayout(
   };
 }
 
-export function analyzeAudioBuffer(buffer: AudioBuffer): LevelData {
+export function analyzeAudioBuffer(buffer: AudioBuffer, trackId: TrackId = "default"): LevelData {
   const mono = createMonoBuffer(buffer);
   const frameSize = 2048;
   const hopSize = 1024;
@@ -1353,7 +1692,7 @@ export function analyzeAudioBuffer(buffer: AudioBuffer): LevelData {
   const detectedBeats = detectBeats(smoothedEnergy, normalizedRms, frameDuration);
   const beatInterval = estimateBeatInterval(detectedBeats);
   const gridBeats = createJumpTimeline(detectedBeats, buffer.duration, beatInterval);
-  const layout = buildLevelLayout(gridBeats, buffer.duration);
+  const layout = buildLevelLayout(gridBeats, buffer.duration, trackId);
   const repairedLayout = repairLayout(
     layout.cues,
     layout.obstacles,
@@ -1362,6 +1701,7 @@ export function analyzeAudioBuffer(buffer: AudioBuffer): LevelData {
   );
 
   return {
+    trackId,
     duration: buffer.duration,
     beatInterval,
     waveform: sampleBuckets(mono, WAVEFORM_BAR_COUNT),

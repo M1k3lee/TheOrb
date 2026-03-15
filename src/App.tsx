@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import trackUrl from "../assets/music/downboy.mp3";
 import foundDaUrl from "../assets/music/Found da.mp3";
+import type { TrackId } from "./game/types";
 import { useRhythmGame } from "./game/useRhythmGame";
 import { RhythmRunnerScene } from "./scene/RhythmRunnerScene";
 
@@ -33,12 +34,15 @@ function formatTime(totalSeconds: number) {
 const TRACK_OPTIONS = [
   { id: "downboy", label: "Downboy", url: trackUrl },
   { id: "found-da", label: "Found da", url: foundDaUrl },
-];
+] satisfies Array<{ id: TrackId; label: string; url: string }>;
 
 export default function App() {
-  const [selectedTrackId, setSelectedTrackId] = useState(TRACK_OPTIONS[0].id);
+  const [selectedTrackId, setSelectedTrackId] = useState<TrackId>(TRACK_OPTIONS[0].id);
   const activeTrack = TRACK_OPTIONS.find((track) => track.id === selectedTrackId) ?? TRACK_OPTIONS[0];
-  const { level, snapshot, snapshotRef, error, startGame, restartGame } = useRhythmGame(activeTrack.url);
+  const { level, snapshot, snapshotRef, error, startGame, restartGame } = useRhythmGame(
+    activeTrack.url,
+    activeTrack.id,
+  );
   const stageRef = useRef<HTMLElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
@@ -219,7 +223,7 @@ export default function App() {
               <select
                 className="track-picker__select"
                 data-ui-interactive="true"
-                onChange={(event) => setSelectedTrackId(event.target.value)}
+                onChange={(event) => setSelectedTrackId(event.target.value as TrackId)}
                 value={selectedTrackId}
               >
                 {TRACK_OPTIONS.map((track) => (

@@ -6,6 +6,8 @@ export type GameStatus =
   | "finished"
   | "error";
 
+export type TrackId = "downboy" | "found-da" | "default";
+
 export interface BeatPoint {
   time: number;
   strength: number;
@@ -39,6 +41,7 @@ export interface CameraMoment {
 }
 
 export interface LevelData {
+  trackId: TrackId;
   duration: number;
   beatInterval: number;
   waveform: number[];
