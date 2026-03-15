@@ -508,6 +508,7 @@ function CameraRig({
   const { camera } = useThree();
   const targetPosition = useRef(new THREE.Vector3());
   const lookTarget = useRef(new THREE.Vector3());
+  const safetyLookTarget = useRef(new THREE.Vector3());
 
   useFrame((state, delta) => {
     const snapshot = snapshotRef.current;
@@ -540,58 +541,58 @@ function CameraRig({
     const impact = Math.max(snapshot.audio.bass, beatPulse * 0.55, momentStrength * 0.72);
     const shotFov =
       shot === "rush"
-        ? 72
+        ? 70
         : shot === "chase"
           ? 66
           : shot === "hero"
-            ? 52
+            ? 56
             : shot === "sweep"
-              ? 56
+              ? 60
               : 62;
 
     if (shot === "rush") {
       targetPosition.current.set(
-        PLAYER_TRACK_X - 3.4 + snapshot.audio.mid * 0.42,
-        4.9 + (snapshot.playerY - GROUND_Y) * 0.22 + impact * 0.45,
-        10.8 - snapshot.audio.overall * 1.4,
+        PLAYER_TRACK_X - 3 + snapshot.audio.mid * 0.26,
+        5.2 + (snapshot.playerY - GROUND_Y) * 0.2 + impact * 0.4,
+        12.4 - snapshot.audio.overall * 1.1,
       );
       lookTarget.current.set(
-        PLAYER_TRACK_X + 16.8,
-        snapshot.playerY * 0.92 + 0.88,
-        -0.24 + Math.sin(state.clock.elapsedTime * 1.1) * 0.18,
+        PLAYER_TRACK_X + 12.4,
+        snapshot.playerY * 0.92 + 0.92,
+        -0.18 + Math.sin(state.clock.elapsedTime * 1.1) * 0.14,
       );
     } else if (shot === "chase") {
       targetPosition.current.set(
-        PLAYER_TRACK_X - 8.2 + snapshot.audio.mid * 0.26,
-        5.6 + (snapshot.playerY - GROUND_Y) * 0.2 + impact * 0.4,
-        13.8 - snapshot.audio.overall * 1.2,
+        PLAYER_TRACK_X - 7.2 + snapshot.audio.mid * 0.22,
+        6 + (snapshot.playerY - GROUND_Y) * 0.18 + impact * 0.36,
+        14.8 - snapshot.audio.overall * 1,
       );
       lookTarget.current.set(
-        PLAYER_TRACK_X + 20.4,
-        snapshot.playerY * 0.9 + 0.92,
-        -0.1 + Math.sin(state.clock.elapsedTime * 0.9) * 0.22,
+        PLAYER_TRACK_X + 13.8,
+        snapshot.playerY * 0.9 + 0.94,
+        -0.08 + Math.sin(state.clock.elapsedTime * 0.9) * 0.18,
       );
     } else if (shot === "hero") {
       targetPosition.current.set(
-        PLAYER_TRACK_X + 9.6 + snapshot.audio.mid * 0.36,
-        13.8 + (snapshot.playerY - GROUND_Y) * 0.1 + impact * 0.32,
-        25.8 - snapshot.audio.overall * 1.1,
+        PLAYER_TRACK_X + 4.6 + snapshot.audio.mid * 0.22,
+        12.8 + (snapshot.playerY - GROUND_Y) * 0.1 + impact * 0.28,
+        24.8 - snapshot.audio.overall * 0.9,
       );
       lookTarget.current.set(
-        PLAYER_TRACK_X + 20.2,
-        snapshot.playerY * 0.82 + 1,
-        -0.7,
+        PLAYER_TRACK_X + 13.2,
+        snapshot.playerY * 0.84 + 0.98,
+        -0.96,
       );
     } else if (shot === "sweep") {
       targetPosition.current.set(
-        PLAYER_TRACK_X + 1.8 + snapshot.audio.mid * 0.22,
-        11.6 + (snapshot.playerY - GROUND_Y) * 0.14 + impact * 0.36,
-        20.4 - snapshot.audio.overall * 0.9,
+        PLAYER_TRACK_X + 0.9 + snapshot.audio.mid * 0.18,
+        10.8 + (snapshot.playerY - GROUND_Y) * 0.14 + impact * 0.3,
+        22.2 - snapshot.audio.overall * 0.8,
       );
       lookTarget.current.set(
-        PLAYER_TRACK_X + 22.8,
+        PLAYER_TRACK_X + 14.4,
         snapshot.playerY * 0.84 + 0.98,
-        -4.8 + Math.sin(state.clock.elapsedTime * 0.7) * 0.6,
+        -1.35 + Math.sin(state.clock.elapsedTime * 0.7) * 0.34,
       );
     } else {
       targetPosition.current.set(
@@ -605,6 +606,34 @@ function CameraRig({
         -0.35 + Math.sin(state.clock.elapsedTime * 0.8) * 0.24,
       );
     }
+
+    const playerAnchorX = PLAYER_TRACK_X + 8.8;
+    const playerAnchorY = snapshot.playerY * 0.88 + 0.96;
+    const safetyBlend =
+      shot === "sweep"
+        ? 0.44
+        : shot === "hero"
+          ? 0.38
+          : shot === "rush"
+            ? 0.34
+            : 0.28;
+
+    lookTarget.current.lerp(
+      safetyLookTarget.current.set(playerAnchorX, playerAnchorY, 0),
+      safetyBlend,
+    );
+    targetPosition.current.x = THREE.MathUtils.clamp(
+      targetPosition.current.x,
+      PLAYER_TRACK_X - 7.6,
+      PLAYER_TRACK_X + 4.8,
+    );
+    targetPosition.current.z = THREE.MathUtils.clamp(targetPosition.current.z, 12, 36);
+    lookTarget.current.x = THREE.MathUtils.clamp(
+      lookTarget.current.x,
+      PLAYER_TRACK_X + 8.4,
+      PLAYER_TRACK_X + 15.2,
+    );
+    lookTarget.current.z = THREE.MathUtils.clamp(lookTarget.current.z, -1.3, 1.3);
 
     camera.position.lerp(targetPosition.current, 1 - Math.exp(-delta * 5));
 

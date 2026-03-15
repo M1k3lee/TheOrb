@@ -400,24 +400,71 @@ function sampleStrengthAtTime(beats: GridBeat[], time: number, interval: number)
   return clamp(weightTotal > 0 ? total / weightTotal : 0.52, 0.32, 1);
 }
 
+function findBestGridPhase(
+  beats: GridBeat[],
+  duration: number,
+  interval: number,
+  startTime: number,
+  endTime: number,
+) {
+  const phaseStepCount = 24;
+  const phaseStep = interval / phaseStepCount;
+  const scoringWindow = interval * 0.18;
+  let bestPhase = startTime % interval;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let phaseIndex = 0; phaseIndex < phaseStepCount; phaseIndex += 1) {
+    const phase = phaseIndex * phaseStep;
+    let score = 0;
+
+    for (const beat of beats) {
+      if (beat.time < startTime - interval || beat.time > endTime + interval) {
+        continue;
+      }
+
+      const nearestGridIndex = Math.round((beat.time - phase) / interval);
+      const alignedTime = phase + nearestGridIndex * interval;
+      const distance = Math.abs(beat.time - alignedTime);
+
+      if (distance > scoringWindow) {
+        continue;
+      }
+
+      const centeredBonus = beat.time >= startTime && beat.time <= endTime ? 0.22 : 0.08;
+      score += beat.strength * (1 - distance / scoringWindow) + centeredBonus;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestPhase = phase;
+    }
+  }
+
+  return bestPhase;
+}
+
 function createJumpTimeline(beats: GridBeat[], duration: number, interval: number) {
   const timeline: GridBeat[] = [];
   const start = 0.82;
   const end = duration - 1.55;
-  let cursor = start;
-  const firstBeat = beats.find((beat) => beat.time >= start - interval * 0.35);
+  const bestPhase = findBestGridPhase(beats, duration, interval, start, end);
+  let cursor = bestPhase;
 
-  if (firstBeat) {
-    cursor = firstBeat.time;
+  while (cursor + interval < start - 0.02) {
+    cursor += interval;
+  }
 
-    while (cursor - interval > start - 0.08) {
-      cursor -= interval;
-    }
+  while (cursor > start + 0.02) {
+    cursor -= interval;
+  }
+
+  if (cursor < start - interval * 0.4) {
+    cursor += interval;
   }
 
   while (cursor <= end) {
     let nearestBeat: GridBeat | null = null;
-    let nearestDistance = interval * 0.26;
+    let nearestDistance = interval * 0.18;
 
     for (const beat of beats) {
       const distance = Math.abs(beat.time - cursor);

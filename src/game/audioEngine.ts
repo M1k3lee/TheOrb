@@ -65,9 +65,26 @@ export class RhythmAudioEngine {
   private startTime = 0;
   private stoppedAt = 0;
   private startRequestId = 0;
+  private playbackLatency = 0;
+
+  private updatePlaybackLatency() {
+    if (!this.context) {
+      this.playbackLatency = 0;
+      return;
+    }
+
+    const outputLatency =
+      "outputLatency" in this.context && typeof this.context.outputLatency === "number"
+        ? this.context.outputLatency
+        : 0;
+    const baseLatency = typeof this.context.baseLatency === "number" ? this.context.baseLatency : 0;
+
+    this.playbackLatency = Math.min(0.18, Math.max(0, baseLatency + outputLatency));
+  }
 
   async load(audioUrl: string, trackId: TrackId = "default"): Promise<LevelData> {
     this.context = this.context ?? new AudioContext();
+    this.updatePlaybackLatency();
     const audioData = await fetchAudioData(audioUrl);
     this.buffer = await this.context.decodeAudioData(audioData.slice(0));
     this.analyser = this.context.createAnalyser();
@@ -104,6 +121,7 @@ export class RhythmAudioEngine {
     const requestId = ++this.startRequestId;
     this.stop(false, false);
     await this.context.resume();
+    this.updatePlaybackLatency();
 
     if (requestId !== this.startRequestId) {
       return;
@@ -145,7 +163,7 @@ export class RhythmAudioEngine {
     if (rememberPosition) {
       this.stoppedAt = Math.max(
         0,
-        Math.min(this.buffer?.duration ?? 0, this.context.currentTime - this.startTime),
+        Math.min(this.buffer?.duration ?? 0, this.context.currentTime - this.startTime - this.playbackLatency),
       );
     }
 
@@ -171,7 +189,7 @@ export class RhythmAudioEngine {
 
     return Math.max(
       0,
-      Math.min(this.buffer.duration, this.context.currentTime - this.startTime),
+      Math.min(this.buffer.duration, this.context.currentTime - this.startTime - this.playbackLatency),
     );
   }
 
