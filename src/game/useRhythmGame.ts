@@ -277,6 +277,8 @@ export function useRhythmGame(audioUrl: string) {
   const nextCueIndexRef = useRef(0);
   const queuedJumpBoostRef = useRef(1);
   const queuedJumpHoldLimitRef = useRef(MAX_HOLD_JUMP_TIME);
+  const launchSequenceRef = useRef(0);
+  const isLaunchingRef = useRef(false);
 
   const commitSnapshot = (audio: AudioFrame, forceUi = false) => {
     const nextSnapshot = buildSnapshot(runtimeRef.current, levelRef.current, audio);
@@ -315,6 +317,8 @@ export function useRhythmGame(audioUrl: string) {
     nextCueIndexRef.current = 0;
     queuedJumpBoostRef.current = 1;
     queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
+    launchSequenceRef.current += 1;
+    isLaunchingRef.current = false;
     setLevel(null);
     setError(null);
     setSnapshot(loadingSnapshot);
@@ -361,16 +365,23 @@ export function useRhythmGame(audioUrl: string) {
     const currentLevel = levelRef.current;
     const previousRuntime = runtimeRef.current;
 
-    if (!engine || !currentLevel) {
+    if (!engine || !currentLevel || isLaunchingRef.current) {
       return;
     }
+
+    isLaunchingRef.current = true;
+    const launchSequence = ++launchSequenceRef.current;
 
     try {
       await engine.start(0);
 
-        runtimeRef.current = {
-          ...previousRuntime,
-          status: "playing",
+      if (launchSequence !== launchSequenceRef.current) {
+        return;
+      }
+
+      runtimeRef.current = {
+        ...previousRuntime,
+        status: "playing",
         time: 0,
         playerY: GROUND_Y,
         playerVelocity: 0,
@@ -392,6 +403,10 @@ export function useRhythmGame(audioUrl: string) {
         overall: 0.12,
       }, true);
     } catch (caughtError) {
+      if (launchSequence !== launchSequenceRef.current) {
+        return;
+      }
+
       runtimeRef.current.status = "ready";
       setError(
         caughtError instanceof Error
@@ -399,6 +414,10 @@ export function useRhythmGame(audioUrl: string) {
           : "Audio playback was blocked.",
       );
       commitSnapshot(createIdleAudio(performance.now(), currentLevel, runtimeRef.current), true);
+    } finally {
+      if (launchSequence === launchSequenceRef.current) {
+        isLaunchingRef.current = false;
+      }
     }
   });
 

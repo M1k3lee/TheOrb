@@ -64,6 +64,7 @@ export class RhythmAudioEngine {
   private frequencyData: Uint8Array<ArrayBuffer> | null = null;
   private startTime = 0;
   private stoppedAt = 0;
+  private startRequestId = 0;
 
   async load(audioUrl: string): Promise<LevelData> {
     this.context = this.context ?? new AudioContext();
@@ -99,8 +100,15 @@ export class RhythmAudioEngine {
       throw new Error("Audio engine is not ready.");
     }
 
-    this.stop(false);
+    const requestId = ++this.startRequestId;
+    this.stop(false, false);
     await this.context.resume();
+
+    if (requestId !== this.startRequestId) {
+      return;
+    }
+
+    this.stop(false, false);
 
     const nextSource = this.context.createBufferSource();
     nextSource.buffer = this.buffer;
@@ -121,7 +129,11 @@ export class RhythmAudioEngine {
     };
   }
 
-  stop(rememberPosition = true) {
+  stop(rememberPosition = true, cancelPendingStart = true) {
+    if (cancelPendingStart) {
+      this.startRequestId += 1;
+    }
+
     if (!this.source || !this.context) {
       return;
     }

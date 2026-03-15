@@ -477,8 +477,7 @@ select {
   }
 
   .game-stage {
-    min-height: 66vh;
-    min-height: 66dvh;
+    min-height: clamp(360px, 62dvh, 620px);
   }
 
   .hint-chip {
@@ -488,14 +487,85 @@ select {
 
 @media (max-width: 720px) {
   .experience-frame {
-    width: min(100vw, calc(100vw - 14px));
-    padding: 10px;
+    width: min(100vw, calc(100vw - 10px));
+    gap: 0.75rem;
+    padding: 8px;
+  }
+
+  .brand h1 {
+    font-size: clamp(2rem, 14vw, 3.4rem);
+  }
+
+  .brand p {
+    font-size: 0.95rem;
+    line-height: 1.45;
+  }
+
+  .meter-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .meter-card {
+    min-width: 0;
+    padding: 0.8rem 0.85rem;
+  }
+
+  .meter-card strong {
+    font-size: 1.15rem;
   }
 
   .game-stage {
-    min-height: 72vh;
-    min-height: 72dvh;
+    min-height: clamp(340px, 54dvh, 480px);
     border-radius: 24px;
+  }
+
+  .stage-overlay {
+    padding: 12px;
+  }
+
+  .progress-panel {
+    padding: 0.8rem 0.9rem;
+  }
+
+  .progress-panel__meta {
+    font-size: 0.74rem;
+  }
+
+  .hint-chip {
+    padding: 0.68rem 0.8rem;
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+  }
+
+  .button,
+  .track-picker__select {
+    min-height: 46px;
+  }
+
+  .status-dock {
+    gap: 0.75rem;
+    padding: 14px;
+  }
+
+  .status-dock__copy h2 {
+    font-size: clamp(1.35rem, 7vw, 1.9rem);
+  }
+
+  .status-dock__copy p {
+    font-size: 0.92rem;
+    line-height: 1.45;
+  }
+
+  .action-row {
+    width: 100%;
+    gap: 0.65rem;
+  }
+
+  .action-row .button,
+  .track-picker {
+    width: 100%;
   }
 
   .waveform-panel,
@@ -507,5 +577,44 @@ select {
 
   .waveform-grid {
     gap: 0.18rem;
+  }
+}
+
+@media (max-width: 560px) {
+  .experience-frame {
+    padding: 6px;
+  }
+
+  .topbar {
+    gap: 0.65rem;
+  }
+
+  .eyebrow,
+  .overlay-panel__eyebrow,
+  .meter-card__label {
+    font-size: 0.62rem;
+    letter-spacing: 0.18em;
+  }
+
+  .meter-row {
+    gap: 0.55rem;
+  }
+
+  .game-stage {
+    min-height: clamp(300px, 48dvh, 420px);
+    border-radius: 20px;
+  }
+
+  .overlay-footer {
+    gap: 0.55rem;
+  }
+
+  .button--primary,
+  .button--ghost {
+    padding: 0.82rem 1rem;
+  }
+
+  .waveform-panel {
+    display: none;
   }
 }
