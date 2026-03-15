@@ -197,6 +197,55 @@ function getVisibleLavaZones(lavaZones: LavaZone[], currentTime: number) {
   return visible;
 }
 
+function isXInsideLavaZone(lavaZones: LavaZone[], x: number) {
+  for (const zone of lavaZones) {
+    const startX = zone.startTime * RUN_SPEED;
+    const endX = zone.endTime * RUN_SPEED;
+
+    if (x < startX) {
+      return false;
+    }
+
+    if (x <= endX) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function createSafeTrackSegments(startX: number, endX: number, lavaZones: LavaZone[]) {
+  const segments: Array<{ centerX: number; length: number }> = [];
+  let cursor = startX;
+
+  for (const zone of lavaZones) {
+    const zoneStartX = Math.max(startX, zone.startTime * RUN_SPEED);
+    const zoneEndX = Math.min(endX, zone.endTime * RUN_SPEED);
+
+    if (zoneEndX <= zoneStartX) {
+      continue;
+    }
+
+    if (zoneStartX > cursor + 0.35) {
+      segments.push({
+        centerX: cursor + (zoneStartX - cursor) * 0.5,
+        length: zoneStartX - cursor,
+      });
+    }
+
+    cursor = Math.max(cursor, zoneEndX);
+  }
+
+  if (endX > cursor + 0.35) {
+    segments.push({
+      centerX: cursor + (endX - cursor) * 0.5,
+      length: endX - cursor,
+    });
+  }
+
+  return segments;
+}
+
 function createMarkerPositions(startX: number, endX: number) {
   const positions: number[] = [];
   const startIndex = Math.floor(startX / MARKER_SPACING) - 1;
@@ -643,11 +692,17 @@ function LavaPool({ zone }: { zone: LavaZone }) {
 
   return (
     <group position={[centerX, 0, 0]}>
+      <pointLight
+        color="#ff7a24"
+        distance={18 + length * 0.3}
+        intensity={1.6 + zone.intensity * 2.2}
+        position={[0, 0.45, 0]}
+      />
       <mesh position={[0, -0.02, 0]}>
         <boxGeometry args={[length, 0.12, 8.5]} />
         <meshStandardMaterial color="#090707" emissive="#120807" emissiveIntensity={0.18} roughness={1} />
       </mesh>
-      <mesh position={[0, -0.18, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh position={[0, -0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[length, 7.8]} />
         <shaderMaterial
           ref={materialRef}
@@ -660,6 +715,17 @@ function LavaPool({ zone }: { zone: LavaZone }) {
           vertexShader={LAVA_VERTEX_SHADER}
         />
       </mesh>
+      {[-3.85, 3.85].map((edge) => (
+        <mesh key={edge} position={[0, 0.03, edge]}>
+          <boxGeometry args={[length, 0.08, 0.16]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color="#ff9b42"
+            opacity={0.28 + zone.intensity * 0.16}
+            transparent
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -804,6 +870,7 @@ function Track({
   const cueBeats = level ? getVisibleBeats(level.beats, snapshot.time) : [];
   const obstacles = level ? getVisibleObstacles(level.obstacles, snapshot.time) : [];
   const lavaZones = level ? getVisibleLavaZones(level.lavaZones, snapshot.time) : [];
+  const trackSegments = createSafeTrackSegments(trackWindow.startX, trackWindow.endX, lavaZones);
   const trackMarkers = createMarkerPositions(trackWindow.startX, trackWindow.endX);
   const edgePylons = createPylonPositions(trackWindow.startX, trackWindow.endX);
 
@@ -819,55 +886,64 @@ function Track({
 
   return (
     <group ref={groupRef} position={[PLAYER_TRACK_X - snapshot.time * RUN_SPEED, 0, 0]}>
-      <mesh position={[trackWindow.centerX, -0.16, 0]}>
-        <boxGeometry args={[trackWindow.length, 0.24, 9.2]} />
-        <meshStandardMaterial
-          color="#051018"
-          emissive="#0d2326"
-          emissiveIntensity={0.72 + snapshot.audio.overall * 0.4}
-          metalness={0.18}
-          roughness={0.6}
-        />
-      </mesh>
-
-      <mesh position={[trackWindow.centerX, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[trackWindow.length, 10]} />
-        <meshStandardMaterial
-          color="#050c11"
-          emissive="#081419"
-          emissiveIntensity={0.42}
-          metalness={0.06}
-          roughness={0.9}
-        />
-      </mesh>
-
       {lavaZones.map((zone) => (
         <LavaPool key={`${zone.startTime}-${zone.endTime}`} zone={zone} />
       ))}
 
-      {LANE_OFFSETS.map((lane) => (
-        <mesh key={lane} position={[trackWindow.centerX, 0.04, lane]}>
-          <boxGeometry args={[trackWindow.length, 0.04, 0.09]} />
-          <meshBasicMaterial
-            color="#7dfff4"
-            opacity={0.32 + snapshot.audio.bass * 0.2}
-            transparent
+      {trackSegments.map((segment) => (
+        <mesh key={`track-${segment.centerX}`} position={[segment.centerX, -0.16, 0]}>
+          <boxGeometry args={[segment.length, 0.24, 9.2]} />
+          <meshStandardMaterial
+            color="#051018"
+            emissive="#0d2326"
+            emissiveIntensity={0.72 + snapshot.audio.overall * 0.4}
+            metalness={0.18}
+            roughness={0.6}
           />
         </mesh>
       ))}
 
-      {EDGE_OFFSETS.map((edge) => (
-        <mesh key={edge} position={[trackWindow.centerX, 0.16, edge]}>
-          <boxGeometry args={[trackWindow.length, 0.18, 0.12]} />
-          <meshBasicMaterial
-            color="#8dfdf5"
-            opacity={0.24 + snapshot.audio.mid * 0.12}
-            transparent
+      {trackSegments.map((segment) => (
+        <mesh key={`surface-${segment.centerX}`} position={[segment.centerX, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[segment.length, 10]} />
+          <meshStandardMaterial
+            color="#050c11"
+            emissive="#081419"
+            emissiveIntensity={0.42}
+            metalness={0.06}
+            roughness={0.9}
           />
         </mesh>
       ))}
+
+      {trackSegments.map((segment) =>
+        LANE_OFFSETS.map((lane) => (
+          <mesh key={`${segment.centerX}-${lane}`} position={[segment.centerX, 0.04, lane]}>
+            <boxGeometry args={[segment.length, 0.04, 0.09]} />
+            <meshBasicMaterial
+              color="#7dfff4"
+              opacity={0.32 + snapshot.audio.bass * 0.2}
+              transparent
+            />
+          </mesh>
+        )),
+      )}
+
+      {trackSegments.map((segment) =>
+        EDGE_OFFSETS.map((edge) => (
+          <mesh key={`${segment.centerX}-${edge}`} position={[segment.centerX, 0.16, edge]}>
+            <boxGeometry args={[segment.length, 0.18, 0.12]} />
+            <meshBasicMaterial
+              color="#8dfdf5"
+              opacity={0.24 + snapshot.audio.mid * 0.12}
+              transparent
+            />
+          </mesh>
+        )),
+      )}
 
       {trackMarkers.map((markerX, index) => (
+        isXInsideLavaZone(lavaZones, markerX) ? null :
         <mesh key={markerX} position={[markerX, 0.03, 0]}>
           <boxGeometry args={[0.16, 0.03, 8.6]} />
           <meshBasicMaterial

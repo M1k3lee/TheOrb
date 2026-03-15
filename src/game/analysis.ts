@@ -499,6 +499,7 @@ function buildClimbBar(
   barIndex: number,
   sectionProgress: number,
   barEnergy: number,
+  useLava: boolean,
 ) {
   const cueOffsets = [0, 2, 4, 6];
   const topHeights = [
@@ -524,13 +525,15 @@ function buildClimbBar(
       0.64 + barEnergy * 0.18,
     ),
   );
-  const lavaZone = createLavaZoneForObstacles(
-    obstacles,
-    0.68 + barEnergy * 0.22,
-    12 + ((barIndex * 9) % 22),
-    0.1,
-    0.46,
-  );
+  const lavaZone = useLava
+    ? createLavaZoneForObstacles(
+        obstacles,
+        0.68 + barEnergy * 0.22,
+        12 + ((barIndex * 9) % 22),
+        0.1,
+        0.46,
+      )
+    : null;
 
   return {
     cues,
@@ -551,6 +554,7 @@ function buildDropBar(
   barBeats: GridBeat[],
   barIndex: number,
   barEnergy: number,
+  useLava: boolean,
 ) {
   const cueOffsets = [0, 2, 4, 6];
   const topHeights = [
@@ -576,13 +580,15 @@ function buildDropBar(
       0.54 + barEnergy * 0.16,
     ),
   );
-  const lavaZone = createLavaZoneForObstacles(
-    obstacles,
-    0.58 + barEnergy * 0.16,
-    18 + ((barIndex * 7) % 18),
-    0.08,
-    0.42,
-  );
+  const lavaZone = useLava
+    ? createLavaZoneForObstacles(
+        obstacles,
+        0.58 + barEnergy * 0.16,
+        18 + ((barIndex * 7) % 18),
+        0.08,
+        0.42,
+      )
+    : null;
 
   return {
     cues,
@@ -603,6 +609,7 @@ function buildBridgeBar(
   barBeats: GridBeat[],
   barIndex: number,
   barEnergy: number,
+  useLava: boolean,
 ) {
   const cueOffsets = [1, 3, 5];
   const topHeights = [1.4, 1.52, 1.24];
@@ -660,13 +667,15 @@ function buildBridgeBar(
     exitPlatform,
     platformSpike,
   ];
-  const lavaZone = createLavaZoneForObstacles(
-    [platformOne, platformTwo, exitPlatform],
-    0.58 + barEnergy * 0.18,
-    18 + ((barIndex * 11) % 18),
-    0.08,
-    0.4,
-  );
+  const lavaZone = useLava
+    ? createLavaZoneForObstacles(
+        [platformOne, platformTwo, exitPlatform],
+        0.58 + barEnergy * 0.18,
+        18 + ((barIndex * 11) % 18),
+        0.08,
+        0.4,
+      )
+    : null;
 
   return {
     cues,
@@ -687,6 +696,7 @@ function buildGauntletBar(
   barBeats: GridBeat[],
   barIndex: number,
   barEnergy: number,
+  useLava: boolean,
 ) {
   const platformOne = createPlatformBlock(
     barBeats[0],
@@ -729,13 +739,15 @@ function buildGauntletBar(
     196,
     0.52 + barEnergy * 0.14,
   );
-  const lavaZone = createLavaZoneForObstacles(
-    [platformOne, midStep, exitPlatform],
-    0.7 + barEnergy * 0.16,
-    10 + ((barIndex * 5) % 26),
-    0.08,
-    0.44,
-  );
+  const lavaZone = useLava
+    ? createLavaZoneForObstacles(
+        [platformOne, midStep, exitPlatform],
+        0.7 + barEnergy * 0.16,
+        10 + ((barIndex * 5) % 26),
+        0.08,
+        0.44,
+      )
+    : null;
 
   return {
     cues: [
@@ -761,6 +773,7 @@ function buildFloatingStepsBar(
   barBeats: GridBeat[],
   barIndex: number,
   barEnergy: number,
+  useLava: boolean,
 ) {
   const cueOffsets = [0, 2, 4, 6];
   const topHeights = [1.48, 1.92, 1.68, 1.24];
@@ -778,13 +791,15 @@ function buildFloatingStepsBar(
       0.5 + barEnergy * 0.14,
     ),
   );
-  const lavaZone = createLavaZoneForObstacles(
-    obstacles,
-    0.62 + barEnergy * 0.14,
-    20 + ((barIndex * 9) % 14),
-    0.08,
-    0.42,
-  );
+  const lavaZone = useLava
+    ? createLavaZoneForObstacles(
+        obstacles,
+        0.62 + barEnergy * 0.14,
+        20 + ((barIndex * 9) % 14),
+        0.08,
+        0.42,
+      )
+    : null;
 
   return {
     cues: cueOffsets.map((offset, index) =>
@@ -843,6 +858,12 @@ function obstaclesCanOverlap(previousObstacle: Obstacle, currentObstacle: Obstac
   );
 }
 
+function minimumObstacleWidth(obstacle: Obstacle) {
+  return obstacle.kind === "spike"
+    ? Math.max(1.16, obstacle.spikes * 0.56)
+    : 2.3;
+}
+
 function normalizeObstacles(obstacles: Obstacle[], duration: number) {
   const sorted = [...obstacles].sort((left, right) => left.time - right.time);
   const normalized: Obstacle[] = [];
@@ -860,11 +881,16 @@ function normalizeObstacles(obstacles: Obstacle[], duration: number) {
       const currentStart = obstacleStartTime(obstacle);
 
       if (currentStart < previousEnd - 0.02 && !obstaclesCanOverlap(previousObstacle, obstacle)) {
-        const adjustedStart = previousEnd + 0.02;
+        const maxAllowedWidth = (obstacle.time - (previousEnd + 0.02)) * RUN_SPEED * 2;
+        const minimumWidth = minimumObstacleWidth(obstacle);
+
+        if (maxAllowedWidth < minimumWidth) {
+          continue;
+        }
 
         nextObstacle = {
           ...obstacle,
-          time: createObstacleCenterTime(adjustedStart, obstacle.width),
+          width: Math.min(obstacle.width, maxAllowedWidth),
         };
       }
     }
@@ -929,21 +955,23 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number) {
     const sectionProgress = barStart / Math.max(1, gridBeats.length - 1);
     const barEnergy =
       barBeats.reduce((total, beat) => total + beat.strength, 0) / Math.max(1, barBeats.length);
-    const useClimb = barIndex > 2 && (barIndex % 9 === 3 || (barIndex % 7 === 1 && barEnergy > 0.66));
-    const useDrop = !useClimb && barIndex > 4 && (barIndex % 9 === 5 || (barIndex % 8 === 2 && sectionProgress > 0.24));
-    const useGauntlet = !useClimb && !useDrop && barIndex > 5 && (barIndex % 10 === 7 || (barEnergy > 0.74 && sectionProgress > 0.34));
+    const useLava = sectionProgress > 0.18;
+    const forceLavaSetpiece = sectionProgress > 0.26 && sectionProgress < 0.86 && barIndex % 10 === 6;
+    const useClimb = !forceLavaSetpiece && barIndex > 2 && (barIndex % 9 === 3 || (barIndex % 7 === 1 && barEnergy > 0.66));
+    const useDrop = !forceLavaSetpiece && !useClimb && barIndex > 4 && (barIndex % 9 === 5 || (barIndex % 8 === 2 && sectionProgress > 0.24));
+    const useGauntlet = forceLavaSetpiece || (!useClimb && !useDrop && barIndex > 5 && (barIndex % 10 === 7 || (barEnergy > 0.74 && sectionProgress > 0.34)));
     const useBridge = !useClimb && !useDrop && !useGauntlet && barIndex > 4 && (barIndex % 8 === 5 || (barEnergy > 0.76 && sectionProgress > 0.38));
     const useFloatingSteps = !useClimb && !useDrop && !useGauntlet && !useBridge && barIndex > 6 && (barIndex % 11 === 9 || sectionProgress > 0.58);
     const generatedBar = useClimb
-      ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy)
+      ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy, useLava)
       : useDrop
-        ? buildDropBar(barBeats, barIndex, barEnergy)
+        ? buildDropBar(barBeats, barIndex, barEnergy, useLava)
         : useGauntlet
-          ? buildGauntletBar(barBeats, barIndex, barEnergy)
+          ? buildGauntletBar(barBeats, barIndex, barEnergy, true)
           : useBridge
-            ? buildBridgeBar(barBeats, barIndex, barEnergy)
+            ? buildBridgeBar(barBeats, barIndex, barEnergy, useLava)
             : useFloatingSteps
-              ? buildFloatingStepsBar(barBeats, barIndex, barEnergy)
+              ? buildFloatingStepsBar(barBeats, barIndex, barEnergy, useLava)
               : buildGroundBar(barBeats, barIndex, sectionProgress, barEnergy);
     const energyMoment = createEnergyCameraMoment(barBeats, barEnergy, previousBarEnergy);
 
@@ -1211,7 +1239,6 @@ function repairObstaclesNearCrash(obstacles: Obstacle[], crashWindowStart: numbe
         width: clamp(obstacle.width * 0.92, 1.48, 4.02),
         height: clamp(obstacle.height * 0.88, 1.36, 2.12),
         spikes: Math.max(1, obstacle.spikes - (obstacle.spikes > 1 ? 1 : 0)),
-        time: obstacle.time + 0.028,
       };
     }
 
