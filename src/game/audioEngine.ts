@@ -8,6 +8,9 @@ const EMPTY_AUDIO_FRAME: AudioFrame = {
   overall: 0,
 };
 
+const audioDataCache = new Map<string, Promise<ArrayBuffer>>();
+const levelCache = new Map<string, Promise<LevelData>>();
+
 function averageRange(values: ArrayLike<number>, start: number, end: number) {
   const safeStart = Math.max(0, start);
   const safeEnd = Math.min(values.length, end);
@@ -25,6 +28,33 @@ function averageRange(values: ArrayLike<number>, start: number, end: number) {
   return total / (safeEnd - safeStart) / 255;
 }
 
+async function fetchAudioData(audioUrl: string) {
+  const cachedData = audioDataCache.get(audioUrl);
+
+  if (cachedData) {
+    return cachedData;
+  }
+
+  const audioDataPromise = (async () => {
+    const response = await fetch(audioUrl);
+
+    if (!response.ok) {
+      throw new Error(`Audio request failed with ${response.status}.`);
+    }
+
+    return response.arrayBuffer();
+  })();
+
+  audioDataCache.set(audioUrl, audioDataPromise);
+
+  try {
+    return await audioDataPromise;
+  } catch (error) {
+    audioDataCache.delete(audioUrl);
+    throw error;
+  }
+}
+
 export class RhythmAudioEngine {
   private context: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -37,15 +67,8 @@ export class RhythmAudioEngine {
 
   async load(audioUrl: string): Promise<LevelData> {
     this.context = this.context ?? new AudioContext();
-
-    const response = await fetch(audioUrl);
-
-    if (!response.ok) {
-      throw new Error(`Audio request failed with ${response.status}.`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    this.buffer = await this.context.decodeAudioData(arrayBuffer);
+    const audioData = await fetchAudioData(audioUrl);
+    this.buffer = await this.context.decodeAudioData(audioData.slice(0));
     this.analyser = this.context.createAnalyser();
     this.analyser.fftSize = 2048;
     this.analyser.smoothingTimeConstant = 0.8;
@@ -54,8 +77,21 @@ export class RhythmAudioEngine {
     this.gainNode.gain.value = 0.94;
     this.gainNode.connect(this.analyser);
     this.analyser.connect(this.context.destination);
+    const cachedLevel = levelCache.get(audioUrl);
 
-    return analyzeAudioBuffer(this.buffer);
+    if (cachedLevel) {
+      return cachedLevel;
+    }
+
+    const levelPromise = Promise.resolve(analyzeAudioBuffer(this.buffer));
+    levelCache.set(audioUrl, levelPromise);
+
+    try {
+      return await levelPromise;
+    } catch (error) {
+      levelCache.delete(audioUrl);
+      throw error;
+    }
   }
 
   async start(offset = 0) {

@@ -191,21 +191,44 @@ function createIdleAudio(now: number, level: LevelData | null, runtime: RuntimeS
 }
 
 export function useRhythmGame(audioUrl: string) {
+  const initialRuntime = createRuntimeState("loading");
+  const initialSnapshot = buildSnapshot(initialRuntime, null, IDLE_AUDIO);
   const [level, setLevel] = useState<LevelData | null>(null);
-  const [snapshot, setSnapshot] = useState<GameSnapshot>(() =>
-    buildSnapshot(createRuntimeState("loading"), null, IDLE_AUDIO),
-  );
+  const [snapshot, setSnapshot] = useState<GameSnapshot>(initialSnapshot);
   const [error, setError] = useState<string | null>(null);
   const engineRef = useRef<RhythmAudioEngine | null>(null);
   const levelRef = useRef<LevelData | null>(null);
-  const runtimeRef = useRef<RuntimeState>(createRuntimeState("loading"));
+  const runtimeRef = useRef<RuntimeState>(initialRuntime);
+  const snapshotRef = useRef<GameSnapshot>(initialSnapshot);
+  const uiSnapshotRef = useRef<GameSnapshot>(initialSnapshot);
+  const lastUiCommitRef = useRef(0);
   const jumpBufferRef = useRef(0);
   const jumpHeldRef = useRef(false);
   const jumpHoldTimeRef = useRef(0);
   const coyoteTimeRef = useRef(0);
 
-  const commitSnapshot = (audio: AudioFrame) => {
-    setSnapshot(buildSnapshot(runtimeRef.current, levelRef.current, audio));
+  const commitSnapshot = (audio: AudioFrame, forceUi = false) => {
+    const nextSnapshot = buildSnapshot(runtimeRef.current, levelRef.current, audio);
+    const previousUiSnapshot = uiSnapshotRef.current;
+    const now = performance.now();
+    const shouldCommitUi =
+      forceUi ||
+      nextSnapshot.status !== previousUiSnapshot.status ||
+      nextSnapshot.deaths !== previousUiSnapshot.deaths ||
+      Math.abs(nextSnapshot.progress - previousUiSnapshot.progress) >= 0.01 ||
+      Math.abs(nextSnapshot.playerY - previousUiSnapshot.playerY) >= 0.18 ||
+      Math.abs(nextSnapshot.crashFlash - previousUiSnapshot.crashFlash) >= 0.08 ||
+      now - lastUiCommitRef.current >= 1000 / 15;
+
+    snapshotRef.current = nextSnapshot;
+
+    if (!shouldCommitUi) {
+      return;
+    }
+
+    uiSnapshotRef.current = nextSnapshot;
+    lastUiCommitRef.current = now;
+    setSnapshot(nextSnapshot);
   };
 
   useEffect(() => {
@@ -214,9 +237,13 @@ export function useRhythmGame(audioUrl: string) {
     engineRef.current = engine;
     levelRef.current = null;
     runtimeRef.current = createRuntimeState("loading");
+    const loadingSnapshot = buildSnapshot(runtimeRef.current, null, IDLE_AUDIO);
+    snapshotRef.current = loadingSnapshot;
+    uiSnapshotRef.current = loadingSnapshot;
+    lastUiCommitRef.current = performance.now();
     setLevel(null);
     setError(null);
-    setSnapshot(buildSnapshot(runtimeRef.current, null, IDLE_AUDIO));
+    setSnapshot(loadingSnapshot);
 
     void (async () => {
       try {
@@ -229,7 +256,7 @@ export function useRhythmGame(audioUrl: string) {
         levelRef.current = analyzedLevel;
         runtimeRef.current.status = "ready";
         setLevel(analyzedLevel);
-        commitSnapshot(createIdleAudio(performance.now(), analyzedLevel, runtimeRef.current));
+        commitSnapshot(createIdleAudio(performance.now(), analyzedLevel, runtimeRef.current), true);
       } catch (caughtError) {
         if (!active) {
           return;
@@ -241,7 +268,7 @@ export function useRhythmGame(audioUrl: string) {
             ? caughtError.message
             : "The music file could not be analyzed.",
         );
-        commitSnapshot(IDLE_AUDIO);
+        commitSnapshot(IDLE_AUDIO, true);
       }
     })();
 
@@ -286,7 +313,7 @@ export function useRhythmGame(audioUrl: string) {
         mid: 0.1,
         treble: 0.08,
         overall: 0.12,
-      });
+      }, true);
     } catch (caughtError) {
       runtimeRef.current.status = "ready";
       setError(
@@ -294,7 +321,7 @@ export function useRhythmGame(audioUrl: string) {
           ? caughtError.message
           : "Audio playback was blocked.",
       );
-      commitSnapshot(createIdleAudio(performance.now(), currentLevel, runtimeRef.current));
+      commitSnapshot(createIdleAudio(performance.now(), currentLevel, runtimeRef.current), true);
     }
   });
 
@@ -490,6 +517,7 @@ export function useRhythmGame(audioUrl: string) {
   return {
     level,
     snapshot,
+    snapshotRef,
     error,
     startGame: launchRun,
     restartGame: launchRun,

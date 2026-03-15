@@ -156,6 +156,15 @@ select {
   color: #f6fffd;
 }
 
+.meter-card__detail {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.82rem;
+  color: rgba(221, 246, 248, 0.66);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .meter-card--accent {
   border-color: rgba(255, 149, 88, 0.28);
 }
@@ -293,8 +302,39 @@ select {
 .action-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
   gap: 0.85rem;
   margin-top: 1.25rem;
+}
+
+.track-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 210px;
+  padding: 0.72rem 0.9rem 0.86rem;
+  border: 1px solid rgba(146, 220, 221, 0.18);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(6, 16, 24, 0.68)),
+    rgba(5, 14, 21, 0.68);
+  backdrop-filter: blur(18px);
+}
+
+.track-picker__select {
+  width: 100%;
+  min-height: 46px;
+  padding: 0.72rem 0.9rem;
+  border: 1px solid rgba(145, 224, 222, 0.22);
+  border-radius: 14px;
+  background: rgba(5, 17, 24, 0.92);
+  color: #f5feff;
+  outline: none;
+}
+
+.track-picker__select:focus {
+  border-color: rgba(79, 255, 241, 0.56);
+  box-shadow: 0 0 0 3px rgba(79, 255, 241, 0.12);
 }
 
 .button {
@@ -430,6 +470,10 @@ select {
 
   .meter-row {
     justify-content: flex-start;
+  }
+
+  .track-picker {
+    width: 100%;
   }
 
   .game-stage {

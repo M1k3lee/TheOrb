@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import trackUrl from "../assets/music/downboy.mp3";
+import foundDaUrl from "../assets/music/Found da.mp3";
 import { useRhythmGame } from "./game/useRhythmGame";
 import { RhythmRunnerScene } from "./scene/RhythmRunnerScene";
 
@@ -29,8 +30,15 @@ function formatTime(totalSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+const TRACK_OPTIONS = [
+  { id: "downboy", label: "Downboy", url: trackUrl },
+  { id: "found-da", label: "Found da", url: foundDaUrl },
+];
+
 export default function App() {
-  const { level, snapshot, error, startGame, restartGame } = useRhythmGame(trackUrl);
+  const [selectedTrackId, setSelectedTrackId] = useState(TRACK_OPTIONS[0].id);
+  const activeTrack = TRACK_OPTIONS.find((track) => track.id === selectedTrackId) ?? TRACK_OPTIONS[0];
+  const { level, snapshot, snapshotRef, error, startGame, restartGame } = useRhythmGame(activeTrack.url);
   const stageRef = useRef<HTMLElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
@@ -71,7 +79,7 @@ export default function App() {
         ? {
             label: "Restart Run",
             action: () => void restartGame(),
-        }
+          }
         : null;
 
   useEffect(() => {
@@ -116,7 +124,8 @@ export default function App() {
           <div className="meter-row">
             <div className="meter-card">
               <span className="meter-card__label">Track</span>
-              <strong>{level ? formatTime(level.duration) : "--:--"}</strong>
+              <strong>{activeTrack.label}</strong>
+              <span className="meter-card__detail">{level ? formatTime(level.duration) : "--:--"}</span>
             </div>
             <div className="meter-card">
               <span className="meter-card__label">Best</span>
@@ -139,7 +148,7 @@ export default function App() {
           ref={stageRef}
         >
           <div className="canvas-wrap">
-            <RhythmRunnerScene level={level} snapshot={snapshot} />
+            <RhythmRunnerScene level={level} snapshot={snapshot} snapshotRef={snapshotRef} />
           </div>
 
           <div className="stage-overlay">
@@ -205,6 +214,22 @@ export default function App() {
           </div>
 
           <div className="action-row">
+            <label className="track-picker" data-ui-interactive="true">
+              <span className="meter-card__label">Track Select</span>
+              <select
+                className="track-picker__select"
+                data-ui-interactive="true"
+                onChange={(event) => setSelectedTrackId(event.target.value)}
+                value={selectedTrackId}
+              >
+                {TRACK_OPTIONS.map((track) => (
+                  <option key={track.id} value={track.id}>
+                    {track.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             {primaryAction ? (
               <button
                 className="button button--primary"
