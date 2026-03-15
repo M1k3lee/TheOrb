@@ -33,6 +33,7 @@ const OVERHEAD_JUMP_ASCENT =
   JUMP_VELOCITY * OVERHEAD_ESCAPE_TIME -
   0.5 * GRAVITY * HOLD_JUMP_GRAVITY_MULTIPLIER * OVERHEAD_ESCAPE_TIME * OVERHEAD_ESCAPE_TIME;
 const TARGET_OVERHEAD_PASSAGE_HEIGHT = PLAYER_COLLISION_HEIGHT + OVERHEAD_JUMP_ASCENT + 0.12;
+const MAX_DECEPTIVE_PLATFORM_TOP_Y = GROUND_Y + PLAYER_COLLISION_RADIUS * 0.72 + 0.14;
 
 interface GridBeat {
   time: number;
@@ -583,6 +584,10 @@ function createPlatformBlock(
 ) {
   const safeThickness = clamp(thickness, 0.32, 1.8);
   const safeTopY = Math.max(safeThickness + 0.16, topY);
+  const baseY =
+    safeTopY <= MAX_DECEPTIVE_PLATFORM_TOP_Y
+      ? 0
+      : safeTopY - safeThickness;
 
   return createBlockObstacle(
     beat,
@@ -592,7 +597,7 @@ function createPlatformBlock(
     frontDelay,
     hueBase,
     glow,
-    safeTopY - safeThickness,
+    baseY,
     leadBias,
   );
 }
