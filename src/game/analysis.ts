@@ -265,10 +265,12 @@ function createSpikeObstacle(
   frontDelay: number,
   hueBase: number,
   glow: number,
+  baseY = 0,
 ) {
   return {
     kind: "spike" as const,
     time: createObstacleCenterTime(beat.time + frontDelay, width),
+    baseY,
     width,
     height,
     spikes,
@@ -285,16 +287,67 @@ function createBlockObstacle(
   frontDelay: number,
   hueBase: number,
   glow: number,
+  baseY = 0,
 ) {
   return {
     kind: "block" as const,
     time: createObstacleCenterTime(beat.time + frontDelay, width),
+    baseY,
     width,
     height,
     spikes: 0,
     hue: hueBase + ((index * 13) % 32),
     glow,
   };
+}
+
+function createPlatformBlock(
+  beat: GridBeat,
+  index: number,
+  width: number,
+  topY: number,
+  thickness: number,
+  frontDelay: number,
+  hueBase: number,
+  glow: number,
+) {
+  const safeThickness = clamp(thickness, 0.32, 1.8);
+  const safeTopY = Math.max(safeThickness + 0.16, topY);
+
+  return createBlockObstacle(
+    beat,
+    index,
+    width,
+    safeThickness,
+    frontDelay,
+    hueBase,
+    glow,
+    safeTopY - safeThickness,
+  );
+}
+
+function createPlatformSpike(
+  beat: GridBeat,
+  index: number,
+  width: number,
+  height: number,
+  spikes: number,
+  frontDelay: number,
+  hueBase: number,
+  glow: number,
+  baseY: number,
+) {
+  return createSpikeObstacle(
+    beat,
+    index,
+    width,
+    height,
+    spikes,
+    frontDelay,
+    hueBase,
+    glow,
+    baseY,
+  );
 }
 
 function buildTokenObstacles(
@@ -419,6 +472,28 @@ function buildGroundBar(
   } satisfies GeneratedBar;
 }
 
+function createLavaZoneForObstacles(
+  obstacles: Obstacle[],
+  intensity: number,
+  hue: number,
+  leadTrim: number,
+  trailTrim: number,
+) {
+  const firstObstacle = obstacles[0];
+  const lastObstacle = obstacles[obstacles.length - 1];
+
+  if (!firstObstacle || !lastObstacle) {
+    return null;
+  }
+
+  return {
+    startTime: Math.max(0, obstacleStartTime(firstObstacle) + leadTrim),
+    endTime: obstacleEndTime(lastObstacle) - trailTrim,
+    intensity,
+    hue,
+  } satisfies LavaZone;
+}
+
 function buildClimbBar(
   barBeats: GridBeat[],
   barIndex: number,
@@ -426,43 +501,41 @@ function buildClimbBar(
   barEnergy: number,
 ) {
   const cueOffsets = [0, 2, 4, 6];
-  const heights = [
-    1.24,
-    clamp(1.82 + barEnergy * 0.18, 1.82, 2.08),
-    clamp(2.34 + barEnergy * 0.22, 2.34, 2.62),
-    clamp(1.78 + sectionProgress * 0.18, 1.78, 2.08),
+  const topHeights = [
+    1.22,
+    clamp(1.66 + barEnergy * 0.16, 1.66, 1.92),
+    clamp(2.06 + barEnergy * 0.2, 2.06, 2.36),
+    1.26 + sectionProgress * 0.08,
   ];
-  const widths = [
-    4.68,
-    4.94,
-    5.24,
-    6.3,
-  ];
-  const cues = cueOffsets.map((offset, index) => createCue(barBeats[offset], "climb", index - 1));
+  const widths = [3.9, 3.55, 3.35, 4.8];
+  const thicknesses = [1.22, 0.42, 0.42, 1.26];
+  const cues = cueOffsets.map((offset, index) =>
+    createCue(barBeats[offset], index === cueOffsets.length - 1 ? "step" : "climb", index - 1),
+  );
   const obstacles = cueOffsets.map((offset, index) =>
-    createBlockObstacle(
+    createPlatformBlock(
       barBeats[offset],
       barIndex * BAR_BEAT_COUNT + offset,
       widths[index],
-      heights[index],
+      topHeights[index],
+      thicknesses[index],
       0.17 + index * 0.01,
       164,
       0.64 + barEnergy * 0.18,
     ),
   );
-  const firstObstacle = obstacles[0];
-  const lastObstacle = obstacles[obstacles.length - 1];
-  const lavaZone: LavaZone = {
-    startTime: Math.max(0, firstObstacle.time - firstObstacle.width / (RUN_SPEED * 2) + 0.02),
-    endTime: lastObstacle.time + lastObstacle.width / (RUN_SPEED * 2) - 0.12,
-    intensity: 0.68 + barEnergy * 0.22,
-    hue: 12 + ((barIndex * 9) % 22),
-  };
+  const lavaZone = createLavaZoneForObstacles(
+    obstacles,
+    0.68 + barEnergy * 0.22,
+    12 + ((barIndex * 9) % 22),
+    0.1,
+    0.46,
+  );
 
   return {
     cues,
     obstacles,
-    lavaZones: [lavaZone],
+    lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
         time: barBeats[1]?.time ?? barBeats[0].time,
@@ -474,45 +547,257 @@ function buildClimbBar(
   } satisfies GeneratedBar;
 }
 
+function buildDropBar(
+  barBeats: GridBeat[],
+  barIndex: number,
+  barEnergy: number,
+) {
+  const cueOffsets = [0, 2, 4, 6];
+  const topHeights = [
+    clamp(2.1 + barEnergy * 0.16, 2.1, 2.36),
+    clamp(1.84 + barEnergy * 0.12, 1.84, 2.06),
+    1.48,
+    1.22,
+  ];
+  const widths = [3.3, 3.2, 3.55, 4.6];
+  const thicknesses = [0.42, 0.4, 0.38, 1.22];
+  const cues = cueOffsets.map((offset, index) =>
+    createCue(barBeats[offset], index < 2 ? "climb" : "step", 1 - index),
+  );
+  const obstacles = cueOffsets.map((offset, index) =>
+    createPlatformBlock(
+      barBeats[offset],
+      barIndex * BAR_BEAT_COUNT + offset,
+      widths[index],
+      topHeights[index],
+      thicknesses[index],
+      0.16 + index * 0.012,
+      202,
+      0.54 + barEnergy * 0.16,
+    ),
+  );
+  const lavaZone = createLavaZoneForObstacles(
+    obstacles,
+    0.58 + barEnergy * 0.16,
+    18 + ((barIndex * 7) % 18),
+    0.08,
+    0.42,
+  );
+
+  return {
+    cues,
+    obstacles,
+    lavaZones: lavaZone ? [lavaZone] : [],
+    cameraMoments: [
+      {
+        time: barBeats[2]?.time ?? barBeats[0].time,
+        duration: 0.7,
+        strength: 0.64 + barEnergy * 0.14,
+        style: "hero",
+      },
+    ],
+  } satisfies GeneratedBar;
+}
+
 function buildBridgeBar(
   barBeats: GridBeat[],
   barIndex: number,
   barEnergy: number,
 ) {
   const cueOffsets = [1, 3, 5];
-  const heights = [1.2, 1.42, 1.28];
-  const widths = [5.3, 5.6, 6.1];
-  const cues = cueOffsets.map((offset, index) => createCue(barBeats[offset], "bridge", index));
-  const obstacles = cueOffsets.map((offset, index) =>
-    createBlockObstacle(
-      barBeats[offset],
-      barIndex * BAR_BEAT_COUNT + offset,
-      widths[index],
-      heights[index],
-      0.18,
-      188,
-      0.58 + barEnergy * 0.18,
-    ),
+  const topHeights = [1.4, 1.52, 1.24];
+  const widths = [5.25, 5.45, 4.9];
+  const thicknesses = [0.42, 0.42, 1.24];
+  const cues = [
+    createCue(barBeats[1], "bridge", 0),
+    createCue(barBeats[3], "tap", 1),
+    createCue(barBeats[5], "step", 2),
+  ];
+  const platformOne = createPlatformBlock(
+    barBeats[1],
+    barIndex * BAR_BEAT_COUNT + 1,
+    widths[0],
+    topHeights[0],
+    thicknesses[0],
+    0.18,
+    188,
+    0.58 + barEnergy * 0.18,
   );
-  const firstObstacle = obstacles[0];
-  const lastObstacle = obstacles[obstacles.length - 1];
-  const lavaZone: LavaZone = {
-    startTime: Math.max(0, firstObstacle.time - firstObstacle.width / (RUN_SPEED * 2) + 0.08),
-    endTime: lastObstacle.time + lastObstacle.width / (RUN_SPEED * 2) - 0.18,
-    intensity: 0.58 + barEnergy * 0.18,
-    hue: 18 + ((barIndex * 11) % 18),
-  };
+  const platformTwo = createPlatformBlock(
+    barBeats[3],
+    barIndex * BAR_BEAT_COUNT + 3,
+    widths[1],
+    topHeights[1],
+    thicknesses[1],
+    0.18,
+    196,
+    0.6 + barEnergy * 0.18,
+  );
+  const exitPlatform = createPlatformBlock(
+    barBeats[5],
+    barIndex * BAR_BEAT_COUNT + 5,
+    widths[2],
+    topHeights[2],
+    thicknesses[2],
+    0.16,
+    202,
+    0.52 + barEnergy * 0.16,
+  );
+  const platformSpike = createPlatformSpike(
+    barBeats[3],
+    barIndex * BAR_BEAT_COUNT + 103,
+    1.22,
+    0.96,
+    1,
+    0.11,
+    16,
+    0.72 + barEnergy * 0.16,
+    topHeights[1],
+  );
+  const obstacles = [
+    platformOne,
+    platformTwo,
+    exitPlatform,
+    platformSpike,
+  ];
+  const lavaZone = createLavaZoneForObstacles(
+    [platformOne, platformTwo, exitPlatform],
+    0.58 + barEnergy * 0.18,
+    18 + ((barIndex * 11) % 18),
+    0.08,
+    0.4,
+  );
 
   return {
     cues,
     obstacles,
-    lavaZones: [lavaZone],
+    lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
         time: barBeats[3]?.time ?? barBeats[0].time,
         duration: 0.72,
         strength: 0.66 + barEnergy * 0.12,
         style: "sweep",
+      },
+    ],
+  } satisfies GeneratedBar;
+}
+
+function buildGauntletBar(
+  barBeats: GridBeat[],
+  barIndex: number,
+  barEnergy: number,
+) {
+  const platformOne = createPlatformBlock(
+    barBeats[0],
+    barIndex * BAR_BEAT_COUNT,
+    5.8,
+    1.56,
+    0.42,
+    0.16,
+    172,
+    0.62 + barEnergy * 0.18,
+  );
+  const platformSpike = createPlatformSpike(
+    barBeats[2],
+    barIndex * BAR_BEAT_COUNT + 102,
+    1.28,
+    0.98,
+    1,
+    0.1,
+    14,
+    0.74 + barEnergy * 0.18,
+    1.56,
+  );
+  const midStep = createPlatformBlock(
+    barBeats[4],
+    barIndex * BAR_BEAT_COUNT + 4,
+    3.1,
+    1.94,
+    0.38,
+    0.16,
+    184,
+    0.56 + barEnergy * 0.16,
+  );
+  const exitPlatform = createPlatformBlock(
+    barBeats[6],
+    barIndex * BAR_BEAT_COUNT + 6,
+    4.45,
+    1.26,
+    1.26,
+    0.16,
+    196,
+    0.52 + barEnergy * 0.14,
+  );
+  const lavaZone = createLavaZoneForObstacles(
+    [platformOne, midStep, exitPlatform],
+    0.7 + barEnergy * 0.16,
+    10 + ((barIndex * 5) % 26),
+    0.08,
+    0.44,
+  );
+
+  return {
+    cues: [
+      createCue(barBeats[0], "bridge", 0),
+      createCue(barBeats[2], "tap", 1),
+      createCue(barBeats[4], "climb", 2),
+      createCue(barBeats[6], "step", 0),
+    ],
+    obstacles: [platformOne, platformSpike, midStep, exitPlatform],
+    lavaZones: lavaZone ? [lavaZone] : [],
+    cameraMoments: [
+      {
+        time: barBeats[2]?.time ?? barBeats[0].time,
+        duration: 0.78,
+        strength: 0.72 + barEnergy * 0.14,
+        style: "rush",
+      },
+    ],
+  } satisfies GeneratedBar;
+}
+
+function buildFloatingStepsBar(
+  barBeats: GridBeat[],
+  barIndex: number,
+  barEnergy: number,
+) {
+  const cueOffsets = [0, 2, 4, 6];
+  const topHeights = [1.48, 1.92, 1.68, 1.24];
+  const widths = [2.9, 2.8, 2.9, 4.6];
+  const thicknesses = [0.36, 0.36, 0.36, 1.24];
+  const obstacles = cueOffsets.map((offset, index) =>
+    createPlatformBlock(
+      barBeats[offset],
+      barIndex * BAR_BEAT_COUNT + offset,
+      widths[index],
+      topHeights[index],
+      thicknesses[index],
+      0.16 + index * 0.01,
+      204,
+      0.5 + barEnergy * 0.14,
+    ),
+  );
+  const lavaZone = createLavaZoneForObstacles(
+    obstacles,
+    0.62 + barEnergy * 0.14,
+    20 + ((barIndex * 9) % 14),
+    0.08,
+    0.42,
+  );
+
+  return {
+    cues: cueOffsets.map((offset, index) =>
+      createCue(barBeats[offset], index === cueOffsets.length - 1 ? "step" : "climb", 1 - index),
+    ),
+    obstacles,
+    lavaZones: lavaZone ? [lavaZone] : [],
+    cameraMoments: [
+      {
+        time: barBeats[4]?.time ?? barBeats[0].time,
+        duration: 0.68,
+        strength: 0.62 + barEnergy * 0.12,
+        style: "hero",
       },
     ],
   } satisfies GeneratedBar;
@@ -543,6 +828,21 @@ function obstacleEndTime(obstacle: Obstacle) {
   return obstacle.time + obstacle.width / (RUN_SPEED * 2);
 }
 
+function obstacleBottom(obstacle: Obstacle) {
+  return obstacle.baseY;
+}
+
+function obstacleTop(obstacle: Obstacle) {
+  return obstacle.baseY + obstacle.height;
+}
+
+function obstaclesCanOverlap(previousObstacle: Obstacle, currentObstacle: Obstacle) {
+  return (
+    obstacleBottom(currentObstacle) >= obstacleTop(previousObstacle) - 0.04 ||
+    obstacleBottom(previousObstacle) >= obstacleTop(currentObstacle) - 0.04
+  );
+}
+
 function normalizeObstacles(obstacles: Obstacle[], duration: number) {
   const sorted = [...obstacles].sort((left, right) => left.time - right.time);
   const normalized: Obstacle[] = [];
@@ -559,7 +859,7 @@ function normalizeObstacles(obstacles: Obstacle[], duration: number) {
       const previousEnd = obstacleEndTime(previousObstacle);
       const currentStart = obstacleStartTime(obstacle);
 
-      if (currentStart < previousEnd - 0.02) {
+      if (currentStart < previousEnd - 0.02 && !obstaclesCanOverlap(previousObstacle, obstacle)) {
         const adjustedStart = previousEnd + 0.02;
 
         nextObstacle = {
@@ -629,13 +929,22 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number) {
     const sectionProgress = barStart / Math.max(1, gridBeats.length - 1);
     const barEnergy =
       barBeats.reduce((total, beat) => total + beat.strength, 0) / Math.max(1, barBeats.length);
-    const useClimb = barIndex > 2 && (barIndex % 7 === 3 || (barIndex % 6 === 1 && barEnergy > 0.68));
-    const useBridge = !useClimb && barIndex > 4 && (barIndex % 8 === 5 || (barEnergy > 0.76 && sectionProgress > 0.38));
+    const useClimb = barIndex > 2 && (barIndex % 9 === 3 || (barIndex % 7 === 1 && barEnergy > 0.66));
+    const useDrop = !useClimb && barIndex > 4 && (barIndex % 9 === 5 || (barIndex % 8 === 2 && sectionProgress > 0.24));
+    const useGauntlet = !useClimb && !useDrop && barIndex > 5 && (barIndex % 10 === 7 || (barEnergy > 0.74 && sectionProgress > 0.34));
+    const useBridge = !useClimb && !useDrop && !useGauntlet && barIndex > 4 && (barIndex % 8 === 5 || (barEnergy > 0.76 && sectionProgress > 0.38));
+    const useFloatingSteps = !useClimb && !useDrop && !useGauntlet && !useBridge && barIndex > 6 && (barIndex % 11 === 9 || sectionProgress > 0.58);
     const generatedBar = useClimb
       ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy)
-      : useBridge
-        ? buildBridgeBar(barBeats, barIndex, barEnergy)
-        : buildGroundBar(barBeats, barIndex, sectionProgress, barEnergy);
+      : useDrop
+        ? buildDropBar(barBeats, barIndex, barEnergy)
+        : useGauntlet
+          ? buildGauntletBar(barBeats, barIndex, barEnergy)
+          : useBridge
+            ? buildBridgeBar(barBeats, barIndex, barEnergy)
+            : useFloatingSteps
+              ? buildFloatingStepsBar(barBeats, barIndex, barEnergy)
+              : buildGroundBar(barBeats, barIndex, sectionProgress, barEnergy);
     const energyMoment = createEnergyCameraMoment(barBeats, barEnergy, previousBarEnergy);
 
     cues.push(...generatedBar.cues);
@@ -662,14 +971,14 @@ function sampleObstacleHeight(obstacle: Obstacle, relativeX: number) {
   const halfWidth = obstacle.width / 2;
 
   if (Math.abs(relativeX) >= halfWidth) {
-    return 0;
+    return obstacle.baseY;
   }
 
   const spikeWidth = obstacle.width / obstacle.spikes;
   const wrappedX = ((relativeX + halfWidth) % spikeWidth + spikeWidth) % spikeWidth;
   const triangle = 1 - Math.abs((wrappedX / spikeWidth) * 2 - 1);
 
-  return obstacle.height * triangle;
+  return obstacle.baseY + obstacle.height * triangle;
 }
 
 function isOverLava(lavaZones: LavaZone[], time: number) {
@@ -738,15 +1047,16 @@ function resolveSimulatedCollisions(
     }
 
     const halfWidth = obstacle.width / 2;
-    const withinBody = Math.abs(relativeX) < halfWidth + PLAYER_RADIUS * 0.62;
-    const topSurface = obstacle.height;
+    const withinTop = Math.abs(relativeX) < halfWidth + PLAYER_RADIUS * 0.62;
+    const withinBody = Math.abs(relativeX) < Math.max(0.12, halfWidth - PLAYER_RADIUS * 0.16);
+    const topSurface = obstacle.baseY + obstacle.height;
     const canLand =
-      withinBody &&
+      withinTop &&
       nextVelocity <= 0 &&
       previousBottom >= topSurface - 0.06 &&
       playerBottom <= topSurface + 0.18;
     const isStanding =
-      withinBody &&
+      withinTop &&
       nextVelocity <= 0.18 &&
       Math.abs(playerBottom - topSurface) <= 0.16;
 
@@ -761,7 +1071,7 @@ function resolveSimulatedCollisions(
       continue;
     }
 
-    if (withinBody && playerBottom < topSurface - 0.04 && playerTop > 0.08) {
+    if (withinBody && playerBottom < topSurface - 0.04 && playerTop > obstacle.baseY + 0.08) {
       return {
         crashed: true,
         grounded: false,

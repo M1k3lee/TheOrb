@@ -718,7 +718,7 @@ function BeatRing({
 function Hazard({ obstacle }: { obstacle: Obstacle }) {
   if (obstacle.kind === "block") {
     return (
-      <group position={[obstacle.time * RUN_SPEED, obstacle.height / 2, 0]}>
+      <group position={[obstacle.time * RUN_SPEED, obstacle.baseY + obstacle.height / 2, 0]}>
         <mesh>
           <boxGeometry args={[obstacle.width, obstacle.height, 2.8]} />
           <meshStandardMaterial
@@ -738,6 +738,17 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
             transparent
           />
         </mesh>
+        {obstacle.baseY > 0.16 ? (
+          <mesh position={[0, -obstacle.height / 2 - obstacle.baseY / 2, 0]}>
+            <boxGeometry args={[obstacle.width * 0.14, obstacle.baseY, 0.16]} />
+            <meshBasicMaterial
+              blending={THREE.AdditiveBlending}
+              color="#4be4ff"
+              opacity={0.08}
+              transparent
+            />
+          </mesh>
+        ) : null}
       </group>
     );
   }
@@ -746,7 +757,7 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
   const spikeWidth = obstacle.width / obstacle.spikes;
 
   return (
-    <group position={[obstacle.time * RUN_SPEED, 0.02, 0]}>
+    <group position={[obstacle.time * RUN_SPEED, obstacle.baseY + 0.02, 0]}>
       <mesh position={[0, 0.04, 0]}>
         <cylinderGeometry args={[obstacle.width * 0.44, obstacle.width * 0.52, 0.12, 16]} />
         <meshBasicMaterial

@@ -81,14 +81,14 @@ function sampleObstacleHeight(obstacle: Obstacle, relativeX: number) {
   const halfWidth = obstacle.width / 2;
 
   if (Math.abs(relativeX) >= halfWidth) {
-    return 0;
+    return obstacle.baseY;
   }
 
   const spikeWidth = obstacle.width / obstacle.spikes;
   const wrappedX = ((relativeX + halfWidth) % spikeWidth + spikeWidth) % spikeWidth;
   const triangle = 1 - Math.abs((wrappedX / spikeWidth) * 2 - 1);
 
-  return obstacle.height * triangle;
+  return obstacle.baseY + obstacle.height * triangle;
 }
 
 function isOverLava(lavaZones: LavaZone[], time: number) {
@@ -157,15 +157,16 @@ function resolvePlayerCollisions(
     }
 
     const halfWidth = obstacle.width / 2;
-    const withinBody = Math.abs(relativeX) < halfWidth + PLAYER_RADIUS * 0.62;
-    const topSurface = obstacle.height;
+    const withinTop = Math.abs(relativeX) < halfWidth + PLAYER_RADIUS * 0.62;
+    const withinBody = Math.abs(relativeX) < Math.max(0.12, halfWidth - PLAYER_RADIUS * 0.16);
+    const topSurface = obstacle.baseY + obstacle.height;
     const canLand =
-      withinBody &&
+      withinTop &&
       nextVelocity <= 0 &&
       previousBottom >= topSurface - 0.06 &&
       playerBottom <= topSurface + 0.18;
     const isStanding =
-      withinBody &&
+      withinTop &&
       nextVelocity <= 0.18 &&
       Math.abs(playerBottom - topSurface) <= 0.16;
 
@@ -180,7 +181,7 @@ function resolvePlayerCollisions(
       continue;
     }
 
-    if (withinBody && playerBottom < topSurface - 0.04 && playerTop > 0.08) {
+    if (withinBody && playerBottom < topSurface - 0.04 && playerTop > obstacle.baseY + 0.08) {
       return {
         crashed: true,
         grounded: false,

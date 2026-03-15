@@ -16,6 +16,7 @@ export interface BeatPoint {
 export interface Obstacle {
   kind: "spike" | "block";
   time: number;
+  baseY: number;
   width: number;
   height: number;
   spikes: number;
