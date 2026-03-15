@@ -1528,6 +1528,10 @@ function isCeilingBeamObstacle(obstacle: Obstacle) {
   return obstacle.kind === "block" && obstacle.baseY > 2.4 && obstacle.height <= 0.82;
 }
 
+function isGroundedBlockObstacle(obstacle: Obstacle) {
+  return obstacle.kind === "block" && obstacle.baseY <= 0.12;
+}
+
 function obstaclesCanOverlap(previousObstacle: Obstacle, currentObstacle: Obstacle) {
   return obstacleVerticalGap(previousObstacle, currentObstacle) >= MIN_STACK_PASSAGE_HEIGHT;
 }
@@ -2187,6 +2191,14 @@ function repairObstaclesNearCrash(obstacles: Obstacle[], crashWindowStart: numbe
         width: clamp(obstacle.width * 0.92, 1.48, 4.02),
         height: clamp(obstacle.height * 0.88, 1.36, 2.12),
         spikes: Math.max(1, obstacle.spikes - (obstacle.spikes > 1 ? 1 : 0)),
+      };
+    }
+
+    if (isGroundedBlockObstacle(obstacle)) {
+      return {
+        ...obstacle,
+        width: clamp(obstacle.width * 0.88, 2.8, 5.8),
+        height: clamp(obstacle.height - 0.22, 0.96, 1.96),
       };
     }
 
