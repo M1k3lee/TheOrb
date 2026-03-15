@@ -933,9 +933,9 @@ function buildBridgeBar(
   useLava: boolean,
   leadBias: number,
 ) {
-  const topHeights = [1.46, 3.02, 1.34];
-  const widths = [5.8, 4.1, 6.4];
-  const thicknesses = [1.06, 0.34, 1.14];
+  const topHeights = [1.34, 3.02, 1.28];
+  const widths = [3.9, 3.7, 4.4];
+  const thicknesses = [0.9, 0.34, 0.92];
   const cues = [
     createCue(barBeats[0], "bridge", 0),
     createCue(barBeats[1], "climb", 1),
@@ -947,7 +947,7 @@ function buildBridgeBar(
     widths[0],
     topHeights[0],
     thicknesses[0],
-    0.14,
+    0.24,
     188,
     0.58 + barEnergy * 0.18,
     leadBias,
@@ -958,7 +958,7 @@ function buildBridgeBar(
     widths[1],
     topHeights[1],
     thicknesses[1],
-    0.14,
+    0.16,
     196,
     0.6 + barEnergy * 0.18,
     leadBias,
@@ -969,7 +969,7 @@ function buildBridgeBar(
     widths[2],
     topHeights[2],
     thicknesses[2],
-    0.14,
+    0.2,
     202,
     0.52 + barEnergy * 0.16,
     leadBias,
