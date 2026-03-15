@@ -79,23 +79,22 @@ const BACKDROP_FRAGMENT_SHADER = `
       atan(direction.z, direction.x) / 6.28318530718 + 0.5,
       direction.y * 0.5 + 0.5
     );
-    float time = uTime * 0.035;
-    float field = fbm(sphereUv * vec2(6.2, 3.4) + vec2(time * 0.9, -time * 0.3));
-    float ribbonField = fbm(vec2(sphereUv.x * 10.0 - time * 1.2, sphereUv.y * 3.8 + time * 0.25));
-    float horizon = smoothstep(-0.22, 0.38, direction.y + 0.12);
-    float aurora = smoothstep(0.52, 0.92, field + direction.y * 0.34 + uMid * 0.22);
-    float halo = smoothstep(0.54, 0.0, length(vec2(direction.x * 0.9 + 0.15, direction.y - 0.18)));
-    float crown = smoothstep(0.34, 0.82, ribbonField + uTreble * 0.18 + direction.y * 0.14);
-    float starCell = hash(floor(sphereUv * vec2(168.0, 92.0)) + floor(time * 6.0));
-    float stars = smoothstep(0.998 - uIntensity * 0.004, 1.0, starCell) * (0.03 + (1.0 - horizon) * 0.08);
+    float time = uTime * 0.01;
+    float nebula = fbm(sphereUv * vec2(3.2, 2.0) + vec2(time * 0.06, -time * 0.03));
+    float softBand = smoothstep(0.58, 0.9, nebula + direction.y * 0.08);
+    float starNoise = hash(floor(sphereUv * vec2(280.0, 180.0)));
+    float stars = smoothstep(0.9968, 1.0, starNoise) * (0.55 + uIntensity * 0.08);
+    float brightNoise = hash(floor(sphereUv * vec2(120.0, 74.0)) + 13.0);
+    float brightStars = smoothstep(0.9986, 1.0, brightNoise) * (0.35 + uTreble * 0.08);
+    float glow = smoothstep(0.72, 0.95, nebula) * 0.06;
 
-    vec3 color = mix(uDeep * 0.76, mix(uDeep, uPrimary, 0.2), horizon);
-    color += aurora * mix(uPrimary, uSecondary, clamp(sphereUv.x + field * 0.16, 0.0, 1.0)) * (0.12 + uIntensity * 0.18);
-    color += halo * mix(uPrimary, vec3(1.0), 0.18) * (0.08 + uBass * 0.18);
-    color += crown * mix(uSecondary, uPrimary, 0.36) * (0.04 + uTreble * 0.12);
-    color += stars * mix(uSecondary, vec3(1.0), 0.3) * 0.24;
-    color += field * mix(uPrimary, uSecondary, 0.4) * 0.04;
-    color = mix(color, uSecondary * 1.02, uCrash * 0.1);
+    vec3 base = mix(vec3(0.005, 0.008, 0.02), uDeep * 0.18, 0.45);
+    vec3 color = base;
+    color += softBand * mix(uPrimary, uSecondary, 0.35) * 0.025;
+    color += glow * mix(uSecondary, vec3(0.65, 0.82, 1.0), 0.25);
+    color += stars * vec3(0.82, 0.9, 1.0) * 0.9;
+    color += brightStars * vec3(1.0, 0.98, 0.95);
+    color = mix(color, color + vec3(0.12, 0.16, 0.22), uCrash * 0.06);
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -283,6 +282,17 @@ function createGlowSpriteTexture() {
   texture.needsUpdate = true;
 
   return texture;
+}
+
+function seededUnit(seed: number) {
+  return THREE.MathUtils.euclideanModulo(
+    Math.sin(seed * 127.1 + 19.19) * 43758.5453123,
+    1,
+  );
+}
+
+function seededRange(seed: number, min: number, max: number) {
+  return THREE.MathUtils.lerp(min, max, seededUnit(seed));
 }
 
 type SnapshotRef = MutableRefObject<GameSnapshot>;
@@ -711,7 +721,7 @@ function Atmosphere({
     const activeSection = level ? getActiveSection(level.sections, snapshot.time) : null;
     const palette = getSectionPalette(activeSection?.theme);
 
-    targetFogColorRef.current.set(palette.fog);
+    targetFogColorRef.current.set(palette.fog).lerp(new THREE.Color("#030714"), 0.74);
     fogColorRef.current.lerp(targetFogColorRef.current, 1 - Math.exp(-delta * 2.4));
 
     if (scene.background instanceof THREE.Color) {
@@ -815,20 +825,21 @@ function ParticleField({
   const positionsRef = useRef<Float32Array | null>(null);
   const spriteTextureRef = useRef<THREE.CanvasTexture | null>(null);
   const targetColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.primary));
+  const starColorRef = useRef(new THREE.Color("#dce7ff"));
 
   if (!spriteTextureRef.current) {
     spriteTextureRef.current = createGlowSpriteTexture();
   }
 
   if (!positionsRef.current) {
-    const pointCount = 180;
+    const pointCount = 160;
     const positions = new Float32Array(pointCount * 3);
 
     for (let index = 0; index < pointCount; index += 1) {
       const stride = index * 3;
-      positions[stride] = (Math.random() - 0.18) * 180;
-      positions[stride + 1] = Math.random() * 28 + 2;
-      positions[stride + 2] = -Math.random() * 72 - 18;
+      positions[stride] = (Math.random() - 0.5) * 260;
+      positions[stride + 1] = Math.random() * 46 + 4;
+      positions[stride + 2] = -Math.random() * 140 - 36;
     }
 
     positionsRef.current = positions;
@@ -843,22 +854,23 @@ function ParticleField({
       return;
     }
 
-    pointsRef.current.rotation.y += delta * 0.006;
-    pointsRef.current.position.x = PLAYER_TRACK_X - snapshot.time * RUN_SPEED * 0.03;
-    pointsRef.current.position.y = 8.8 + Math.sin(state.clock.elapsedTime * 0.22) * 0.24;
+    pointsRef.current.rotation.y += delta * 0.0008;
+    pointsRef.current.position.x = PLAYER_TRACK_X - snapshot.time * RUN_SPEED * 0.008;
+    pointsRef.current.position.y = 20 + Math.sin(state.clock.elapsedTime * 0.08) * 0.15;
+    pointsRef.current.position.z = -48;
 
     if (!materialRef.current) {
       return;
     }
 
-    targetColorRef.current.set(palette.primary);
+    targetColorRef.current.set(palette.secondary).lerp(starColorRef.current, 0.7);
     materialRef.current.color.lerp(targetColorRef.current, 1 - Math.exp(-delta * 4));
-    materialRef.current.opacity = 0.08 + (activeSection?.intensity ?? 0.4) * 0.05;
-    materialRef.current.size = 0.26 + snapshot.audio.overall * 0.04;
+    materialRef.current.opacity = 0.035 + snapshot.audio.overall * 0.01;
+    materialRef.current.size = 0.11 + snapshot.audio.overall * 0.01;
   });
 
   return (
-    <points ref={pointsRef} position={[0, 8.8, -24]}>
+    <points ref={pointsRef} position={[0, 20, -48]}>
       <bufferGeometry>
         <bufferAttribute
           args={[positionsRef.current, 3]}
@@ -873,13 +885,141 @@ function ParticleField({
         color="#8ffcff"
         map={spriteTextureRef.current ?? undefined}
         depthWrite={false}
-        opacity={0.12}
-        size={0.24}
+        opacity={0.04}
+        size={0.11}
         sizeAttenuation
         alphaTest={0.02}
         transparent
       />
     </points>
+  );
+}
+
+function SpaceVista({
+  level,
+  snapshotRef,
+}: {
+  level: LevelData | null;
+  snapshotRef: SnapshotRef;
+}) {
+  const { camera } = useThree();
+  const groupRef = useRef<THREE.Group>(null);
+  const planetMaterialRef = useRef<THREE.MeshStandardMaterial>(null);
+  const planetGlowRef = useRef<THREE.MeshBasicMaterial>(null);
+  const moonMaterialRef = useRef<THREE.MeshStandardMaterial>(null);
+  const ringMaterialRef = useRef<THREE.MeshBasicMaterial>(null);
+  const hazeMaterialRef = useRef<THREE.MeshBasicMaterial>(null);
+  const targetPrimaryColorRef = useRef(new THREE.Color("#6ab4ff"));
+  const targetSecondaryColorRef = useRef(new THREE.Color("#c9e1ff"));
+  const mutedPrimaryColorRef = useRef(new THREE.Color("#4d78b8"));
+  const mutedSecondaryColorRef = useRef(new THREE.Color("#d6e6ff"));
+
+  useFrame((state, delta) => {
+    const snapshot = snapshotRef.current;
+    const activeSection = level ? getActiveSection(level.sections, snapshot.time) : null;
+    const palette = getSectionPalette(activeSection?.theme);
+    const colorLerp = 1 - Math.exp(-delta * 2.4);
+
+    targetPrimaryColorRef.current.set(palette.primary).lerp(mutedPrimaryColorRef.current, 0.72);
+    targetSecondaryColorRef.current.set(palette.secondary).lerp(mutedSecondaryColorRef.current, 0.68);
+
+    if (groupRef.current) {
+      groupRef.current.position.copy(camera.position);
+      groupRef.current.rotation.y = state.clock.elapsedTime * 0.01;
+    }
+
+    if (planetMaterialRef.current) {
+      planetMaterialRef.current.color.lerp(targetPrimaryColorRef.current, colorLerp);
+      planetMaterialRef.current.emissive.lerp(targetPrimaryColorRef.current, colorLerp);
+      planetMaterialRef.current.emissiveIntensity = 0.06 + snapshot.audio.overall * 0.04;
+    }
+
+    if (planetGlowRef.current) {
+      planetGlowRef.current.color.lerp(targetSecondaryColorRef.current, colorLerp);
+      planetGlowRef.current.opacity = 0.07 + snapshot.audio.mid * 0.03;
+    }
+
+    if (moonMaterialRef.current) {
+      moonMaterialRef.current.color.lerp(targetSecondaryColorRef.current, colorLerp);
+      moonMaterialRef.current.emissive.lerp(targetPrimaryColorRef.current, colorLerp);
+      moonMaterialRef.current.emissiveIntensity = 0.04;
+    }
+
+    if (ringMaterialRef.current) {
+      ringMaterialRef.current.color.lerp(targetSecondaryColorRef.current, colorLerp);
+      ringMaterialRef.current.opacity = 0.12;
+    }
+
+    if (hazeMaterialRef.current) {
+      hazeMaterialRef.current.color.lerp(targetPrimaryColorRef.current, colorLerp);
+      hazeMaterialRef.current.opacity = 0.03 + snapshot.audio.treble * 0.01;
+    }
+  });
+
+  return (
+    <group ref={groupRef}>
+      <group position={[-56, 18, -122]}>
+        <mesh>
+          <sphereGeometry args={[12.5, 36, 36]} />
+          <meshStandardMaterial
+            ref={planetMaterialRef}
+            color="#4d78b8"
+            emissive="#4d78b8"
+            emissiveIntensity={0.08}
+            metalness={0.02}
+            roughness={0.96}
+          />
+        </mesh>
+        <mesh scale={[1.1, 1.1, 1.1]}>
+          <sphereGeometry args={[12.5, 24, 24]} />
+          <meshBasicMaterial
+            ref={planetGlowRef}
+            blending={THREE.AdditiveBlending}
+            color="#d6e6ff"
+            depthWrite={false}
+            opacity={0.08}
+            transparent
+          />
+        </mesh>
+        <mesh rotation={[0.66, 0.2, 0.24]}>
+          <torusGeometry args={[18.2, 0.36, 12, 64]} />
+          <meshBasicMaterial
+            ref={ringMaterialRef}
+            blending={THREE.AdditiveBlending}
+            color="#d6e6ff"
+            depthWrite={false}
+            opacity={0.12}
+            transparent
+          />
+        </mesh>
+      </group>
+
+      <group position={[38, 24, -110]}>
+        <mesh>
+          <sphereGeometry args={[3.8, 24, 24]} />
+          <meshStandardMaterial
+            ref={moonMaterialRef}
+            color="#d6e6ff"
+            emissive="#4d78b8"
+            emissiveIntensity={0.04}
+            metalness={0.01}
+            roughness={0.98}
+          />
+        </mesh>
+      </group>
+
+      <mesh position={[6, 8, -118]} scale={[54, 16, 1]}>
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial
+          ref={hazeMaterialRef}
+          blending={THREE.AdditiveBlending}
+          color="#4d78b8"
+          depthWrite={false}
+          opacity={0.03}
+          transparent
+        />
+      </mesh>
+    </group>
   );
 }
 
@@ -1523,13 +1663,59 @@ function SectionScenery({ section }: { section: LevelSection }) {
         </mesh>
       </group>
 
-      <group position={[0, -2.2 - section.variant * 0.24, -36]}>
+      <group position={[0, -1.9 + section.variant * 0.08, -44]}>
+        <mesh rotation={[0.1, 0, 0]} scale={[Math.max(18, length * 0.09), 1.5, 7.4]}>
+          <cylinderGeometry args={[1, 1, 1, 28]} />
+          <meshStandardMaterial
+            color={palette.deep}
+            emissive={palette.primary}
+            emissiveIntensity={0.018 + section.intensity * 0.014}
+            metalness={0.02}
+            roughness={0.98}
+          />
+        </mesh>
+        <mesh position={[0, 0.95, 0]} rotation={[0.1, 0, 0]} scale={[Math.max(19, length * 0.095), 1.2, 8.2]}>
+          <cylinderGeometry args={[1, 1, 1, 28]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={warmHorizon ? palette.markerAccent : palette.secondary}
+            depthWrite={false}
+            opacity={0.028 + section.intensity * 0.014}
+            transparent
+          />
+        </mesh>
+      </group>
+
+      <group position={[0, -0.9 + section.variant * 0.06, -28]}>
+        <mesh rotation={[0.12, 0, 0]} scale={[Math.max(15, length * 0.08), 1.3, 5.8]}>
+          <cylinderGeometry args={[1, 1, 1, 24]} />
+          <meshStandardMaterial
+            color={palette.trackBase}
+            emissive={palette.primary}
+            emissiveIntensity={0.02 + section.intensity * 0.014}
+            metalness={0.03}
+            roughness={0.96}
+          />
+        </mesh>
+        <mesh position={[0, 0.65, 0]} rotation={[0.12, 0, 0]} scale={[Math.max(16, length * 0.085), 1, 6.4]}>
+          <cylinderGeometry args={[1, 1, 1, 24]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={palette.secondary}
+            depthWrite={false}
+            opacity={0.022 + section.intensity * 0.012}
+            transparent
+          />
+        </mesh>
+      </group>
+
+      <group position={[0, -1.05 - section.variant * 0.1, -36]}>
         {farOffsets.map((offset, index) => (
           <group key={`landmass-${offset}`} position={[offset * 0.72, 0, index % 2 === 0 ? -2.2 : 1.4]}>
             <mesh
-              position={[0, 4.6 + (index % 3) * 0.68, 0]}
+              position={[0, 2.1 + (index % 3) * 0.34, 0]}
               rotation={[0.02, index * 0.18, index % 2 === 0 ? 0.08 : -0.06]}
-              scale={[8.2 - (index % 3) * 0.55, 5.2 + (index % 2) * 0.55, 2.3]}
+              scale={[6.8 - (index % 3) * 0.45, 3.2 + (index % 2) * 0.36, 1.8]}
             >
               <coneGeometry args={[1, 1, 7]} />
               <meshStandardMaterial
@@ -1541,9 +1727,9 @@ function SectionScenery({ section }: { section: LevelSection }) {
               />
             </mesh>
             <mesh
-              position={[0, 4.8 + (index % 3) * 0.68, 0]}
+              position={[0, 2.3 + (index % 3) * 0.34, 0]}
               rotation={[0.02, index * 0.18, index % 2 === 0 ? 0.08 : -0.06]}
-              scale={[8.8 - (index % 3) * 0.55, 5.4 + (index % 2) * 0.55, 2.9]}
+              scale={[7.4 - (index % 3) * 0.45, 3.5 + (index % 2) * 0.36, 2.3]}
             >
               <coneGeometry args={[1, 1, 7]} />
               <meshBasicMaterial
@@ -1554,17 +1740,34 @@ function SectionScenery({ section }: { section: LevelSection }) {
                 transparent
               />
             </mesh>
+            {[-1, 1].map((sign) => (
+              <mesh
+                key={sign}
+                position={[sign * (2.1 + (index % 2) * 0.4), 1.1 + (index % 2) * 0.22, sign * 0.72]}
+                rotation={[0.04, sign * 0.24, sign * 0.06]}
+                scale={[1.7, 1.8 + (index % 3) * 0.18, 1.2]}
+              >
+                <dodecahedronGeometry args={[1, 0]} />
+                <meshStandardMaterial
+                  color={sign > 0 ? palette.trackBase : palette.deep}
+                  emissive={palette.secondary}
+                  emissiveIntensity={0.018}
+                  metalness={0.04}
+                  roughness={0.94}
+                />
+              </mesh>
+            ))}
           </group>
         ))}
       </group>
 
-      <group position={[0, -1.2 + section.variant * 0.1, -24]}>
+      <group position={[0, -0.34 + section.variant * 0.06, -24]}>
         {landmarkOffsets.map((offset, index) => (
           <group key={`landmark-${offset}`} position={[offset, 0, index % 2 === 0 ? -0.8 : 1]}>
             <mesh
-              position={[0, 3.1 + (index % 2) * 0.55, 0]}
+              position={[0, 1.55 + (index % 2) * 0.26, 0]}
               rotation={[0.08, index * 0.24, 0.08]}
-              scale={[1.7 + (index % 2) * 0.35, 5.2 + (index % 3) * 0.95, 1.4]}
+              scale={[1.3 + (index % 2) * 0.22, 3.4 + (index % 3) * 0.55, 1.1]}
             >
               <cylinderGeometry args={[0.34, 0.76, 1, 6]} />
               <meshStandardMaterial
@@ -1578,9 +1781,9 @@ function SectionScenery({ section }: { section: LevelSection }) {
             {[-1, 1].map((sign) => (
               <group
                 key={sign}
-                position={[sign * (1.7 + (index % 2) * 0.45), 1.3 + (index % 3) * 0.24, sign * 0.74]}
+                position={[sign * (1.6 + (index % 2) * 0.4), 0.72 + (index % 3) * 0.16, sign * 0.74]}
               >
-                <mesh rotation={[0.04, sign * 0.28, sign * 0.06]} scale={[1.2, 3.4 + (index % 2) * 0.48, 1.1]}>
+                <mesh rotation={[0.04, sign * 0.28, sign * 0.06]} scale={[0.88, 2.3 + (index % 2) * 0.28, 0.88]}>
                   <coneGeometry args={[0.42, 1, 5]} />
                   <meshStandardMaterial
                     color={sign > 0 ? palette.pylon : palette.deep}
@@ -1590,7 +1793,7 @@ function SectionScenery({ section }: { section: LevelSection }) {
                     roughness={0.9}
                   />
                 </mesh>
-                <mesh rotation={[0.04, sign * 0.28, sign * 0.06]} scale={[1.34, 3.8 + (index % 2) * 0.54, 1.24]}>
+                <mesh rotation={[0.04, sign * 0.28, sign * 0.06]} scale={[1.04, 2.6 + (index % 2) * 0.32, 1.02]}>
                   <coneGeometry args={[0.42, 1, 5]} />
                   <meshBasicMaterial
                     blending={THREE.AdditiveBlending}
@@ -1610,10 +1813,10 @@ function SectionScenery({ section }: { section: LevelSection }) {
         {edgeOffsets.map((offset, index) => (
           <group key={`flora-${offset}`} position={[offset * 0.88, 0, 0]}>
             {[-1, 1].map((sign) => (
-              <group key={sign} position={[0, 0.64 + (index % 2) * 0.14, sign * 10.9]}>
+              <group key={sign} position={[0, 0.14 + (index % 2) * 0.08, sign * 10.9]}>
                 <mesh
                   rotation={[0.18, index * 0.22, sign * 0.1]}
-                  scale={[0.84, 3.6 + (index % 3) * 0.42, 0.84]}
+                  scale={[0.62, 2.3 + (index % 3) * 0.28, 0.62]}
                 >
                   <coneGeometry args={[0.46 + section.intensity * 0.08, 1, 5]} />
                   <meshStandardMaterial
@@ -1626,7 +1829,7 @@ function SectionScenery({ section }: { section: LevelSection }) {
                 </mesh>
                 <mesh
                   rotation={[0.18, index * 0.22, sign * 0.1]}
-                  scale={[1, 4.2 + (index % 3) * 0.52, 1]}
+                  scale={[0.78, 2.8 + (index % 3) * 0.34, 0.78]}
                 >
                   <coneGeometry args={[0.46 + section.intensity * 0.08, 1, 5]} />
                   <meshBasicMaterial
@@ -1641,19 +1844,6 @@ function SectionScenery({ section }: { section: LevelSection }) {
             ))}
           </group>
         ))}
-      </group>
-
-      <group position={[0, 8.6 + section.variant * 0.8, -24 - section.variant * 1.2]}>
-        <mesh rotation={[0.24, section.variant * 0.3, 0.08]}>
-          <torusGeometry args={[5.8 + section.intensity * 1.2, 0.1, 12, 42]} />
-          <meshBasicMaterial
-            blending={THREE.AdditiveBlending}
-            color={palette.secondary}
-            depthWrite={false}
-            opacity={0.04 + section.intensity * 0.03}
-            transparent
-          />
-        </mesh>
       </group>
 
       {section.kind === "ground"
@@ -1955,6 +2145,311 @@ function SectionScenery({ section }: { section: LevelSection }) {
   );
 }
 
+function AlienJelly({
+  palette,
+  position,
+  scale = 1,
+  sway = 0,
+}: {
+  palette: ThemePalette;
+  position: [number, number, number];
+  scale?: number;
+  sway?: number;
+}) {
+  return (
+    <group position={position} rotation={[0, sway * 0.12, sway * 0.04]} scale={scale}>
+      <mesh position={[0, 0.8, 0]} scale={[1.7, 1.02, 1.7]}>
+        <sphereGeometry args={[1, 24, 24]} />
+        <meshStandardMaterial
+          color={palette.primary}
+          emissive={palette.primary}
+          emissiveIntensity={0.92}
+          metalness={0.02}
+          roughness={0.18}
+        />
+      </mesh>
+      <mesh position={[0, 0.84, 0]} scale={[2.15, 1.24, 2.15]}>
+        <sphereGeometry args={[1, 20, 20]} />
+        <meshBasicMaterial
+          blending={THREE.AdditiveBlending}
+          color={palette.secondary}
+          depthWrite={false}
+          opacity={0.12}
+          transparent
+        />
+      </mesh>
+      <mesh position={[0, 0.18, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[1.08, 0.08, 10, 28]} />
+        <meshBasicMaterial
+          blending={THREE.AdditiveBlending}
+          color={palette.light}
+          depthWrite={false}
+          opacity={0.22}
+          transparent
+        />
+      </mesh>
+      {[-0.72, -0.24, 0.18, 0.62].map((offset, index) => {
+        const tentacleLength = 1.8 + index * 0.34 + Math.abs(sway) * 0.4;
+        const tilt = sway * 0.12 + (index - 1.5) * 0.05;
+
+        return (
+          <group key={offset} position={[offset, -0.1, index % 2 === 0 ? -0.18 : 0.16]}>
+            <mesh position={[0, -tentacleLength * 0.5, 0]} rotation={[tilt, 0, 0]}>
+              <cylinderGeometry args={[0.035, 0.08, tentacleLength, 8]} />
+              <meshBasicMaterial
+                blending={THREE.AdditiveBlending}
+                color={palette.primary}
+                depthWrite={false}
+                opacity={0.2}
+                transparent
+              />
+            </mesh>
+            <mesh position={[0, -tentacleLength - 0.08, 0]}>
+              <sphereGeometry args={[0.08, 12, 12]} />
+              <meshBasicMaterial
+                blending={THREE.AdditiveBlending}
+                color={palette.secondary}
+                depthWrite={false}
+                opacity={0.3}
+                transparent
+              />
+            </mesh>
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+function BiolumSectionScenery({ section }: { section: LevelSection }) {
+  const palette = getSectionPalette(section.theme);
+  const startX = section.startTime * RUN_SPEED;
+  const endX = section.endTime * RUN_SPEED;
+  const length = Math.max(12, endX - startX);
+  const centerX = (startX + endX) * 0.5;
+  const spacing = getSectionSpacing(section.kind);
+  const ridgeOffsets = createSectionOffsets(length, Math.max(18, spacing * 1.35));
+  const shelfOffsets = createSectionOffsets(length, Math.max(13, spacing * 1.05));
+  const floraOffsets = createSectionOffsets(length, Math.max(11, spacing * 0.9));
+  const jellyOffsets = createSectionOffsets(length, Math.max(22, spacing * 1.7)).slice(0, 4);
+  const waterWidth = Math.max(52, length + 36);
+  const waterGlowOpacity = 0.05 + section.intensity * 0.03;
+  const horizonGlowOpacity = 0.08 + section.intensity * 0.05;
+  const shelfGlowOpacity = 0.035 + section.intensity * 0.02;
+
+  return (
+    <group position={[centerX, 0, 0]}>
+      <pointLight
+        color={palette.light}
+        distance={46 + length * 0.18}
+        intensity={0.5 + section.intensity * 0.52}
+        position={[0, 6.4 + section.variant * 0.35, -18]}
+      />
+
+      <group position={[0, 4.8 + section.variant * 0.3, -64]}>
+        <mesh scale={[24, 3.6, 3]}>
+          <sphereGeometry args={[1, 24, 24]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={palette.primary}
+            depthWrite={false}
+            opacity={horizonGlowOpacity}
+            transparent
+          />
+        </mesh>
+        <mesh position={[0, -0.8, 0]} scale={[30, 1.5, 2.6]}>
+          <sphereGeometry args={[1, 18, 18]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={palette.secondary}
+            depthWrite={false}
+            opacity={horizonGlowOpacity * 0.55}
+            transparent
+          />
+        </mesh>
+      </group>
+
+      <group position={[0, -1.8 - section.variant * 0.08, -48]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[waterWidth, 44]} />
+          <meshStandardMaterial
+            color={palette.trackBase}
+            emissive={palette.primary}
+            emissiveIntensity={0.16 + section.intensity * 0.1}
+            metalness={0.06}
+            roughness={0.84}
+          />
+        </mesh>
+        <mesh position={[0, 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[waterWidth * 0.94, 36]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={palette.secondary}
+            depthWrite={false}
+            opacity={waterGlowOpacity}
+            transparent
+          />
+        </mesh>
+      </group>
+
+      <group position={[0, -2.25, -61]}>
+        {ridgeOffsets.map((offset, index) => {
+          const seed = section.startTime * 37 + index * 11 + section.variant;
+          const width = seededRange(seed + 1, 5.8, 10.6);
+          const height = seededRange(seed + 2, 4.6, 9.8);
+          const depth = seededRange(seed + 3, 4.6, 8.4);
+          const x = offset * 0.92 + seededRange(seed + 4, -2.4, 2.4);
+          const z = seededRange(seed + 5, -4.2, 1.8);
+          const rotationY = seededRange(seed + 6, -0.22, 0.22);
+
+          return (
+            <group key={`ridge-${offset}`} position={[x, 0, z]} rotation={[0, rotationY, 0]}>
+              <mesh position={[0, height * 0.48, 0]} scale={[width, height, depth]}>
+                <coneGeometry args={[1, 1, 7]} />
+                <meshStandardMaterial
+                  color={index % 2 === 0 ? palette.deep : palette.trackBase}
+                  emissive={palette.primary}
+                  emissiveIntensity={0.08 + section.intensity * 0.04}
+                  metalness={0.03}
+                  roughness={0.95}
+                />
+              </mesh>
+              <mesh position={[0, height * 0.34, 0.25]} scale={[width * 1.12, height * 0.44, depth * 1.18]}>
+                <sphereGeometry args={[1, 18, 18]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={palette.secondary}
+                  depthWrite={false}
+                  opacity={0.03 + section.intensity * 0.018}
+                  transparent
+                />
+              </mesh>
+            </group>
+          );
+        })}
+      </group>
+
+      <group position={[0, -1.15, -36]}>
+        {shelfOffsets.map((offset, index) => {
+          const seed = section.startTime * 29 + index * 13 + section.variant * 3;
+          const width = seededRange(seed + 1, 4.2, 7.4);
+          const height = seededRange(seed + 2, 1.8, 3.6);
+          const depth = seededRange(seed + 3, 2.8, 5.2);
+          const x = offset + seededRange(seed + 4, -1.4, 1.4);
+          const z = seededRange(seed + 5, -2.2, 2);
+
+          return (
+            <group key={`shelf-${offset}`} position={[x, 0, z]}>
+              <mesh position={[0, height * 0.5, 0]} scale={[width, height, depth]}>
+                <cylinderGeometry args={[1, 1.18, 1, 8]} />
+                <meshStandardMaterial
+                  color={palette.trackBase}
+                  emissive={palette.primary}
+                  emissiveIntensity={0.08 + section.intensity * 0.04}
+                  metalness={0.04}
+                  roughness={0.92}
+                />
+              </mesh>
+              <mesh position={[0, height + 0.12, 0]} scale={[width * 0.92, 0.28, depth * 0.88]}>
+                <sphereGeometry args={[1, 16, 16]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={palette.secondary}
+                  depthWrite={false}
+                  opacity={shelfGlowOpacity}
+                  transparent
+                />
+              </mesh>
+            </group>
+          );
+        })}
+      </group>
+
+      {jellyOffsets.map((offset, index) => {
+        const seed = section.startTime * 41 + index * 17;
+
+        return (
+          <AlienJelly
+            key={`jelly-${offset}`}
+            palette={palette}
+            position={[
+              offset + seededRange(seed + 1, -2.2, 2.2),
+              seededRange(seed + 2, 9.5, 16),
+              seededRange(seed + 3, -52, -26),
+            ]}
+            scale={seededRange(seed + 4, 1.25, 2.4)}
+            sway={seededRange(seed + 5, -1, 1)}
+          />
+        );
+      })}
+
+      <group position={[0, 0, 0]}>
+        {floraOffsets.map((offset, index) =>
+          [-1, 1].map((sign) => {
+            const seed = section.startTime * 53 + index * 19 + sign * 7;
+            const stemHeight = seededRange(seed + 1, 1.8, 4.6);
+            const capScale = seededRange(seed + 2, 0.72, 1.34);
+            const x = offset + seededRange(seed + 3, -0.9, 0.9);
+            const z = sign * seededRange(seed + 4, 11.6, 15.6);
+            const lean = seededRange(seed + 5, -0.2, 0.2);
+
+            return (
+              <group key={`flora-${offset}-${sign}`} position={[x, 0, z]} rotation={[0, lean, sign * 0.06]}>
+                <mesh position={[0, stemHeight * 0.5, 0]}>
+                  <cylinderGeometry args={[0.12 * capScale, 0.24 * capScale, stemHeight, 8]} />
+                  <meshStandardMaterial
+                    color={sign > 0 ? palette.trackBase : palette.deep}
+                    emissive={palette.secondary}
+                    emissiveIntensity={0.08 + section.intensity * 0.04}
+                    metalness={0.03}
+                    roughness={0.9}
+                  />
+                </mesh>
+                <mesh position={[0, stemHeight + 0.24 * capScale, 0]} scale={[1.2 * capScale, 0.52, 1.2 * capScale]}>
+                  <sphereGeometry args={[1, 18, 18]} />
+                  <meshStandardMaterial
+                    color={palette.primary}
+                    emissive={palette.primary}
+                    emissiveIntensity={0.82 + section.intensity * 0.32}
+                    metalness={0.02}
+                    roughness={0.18}
+                  />
+                </mesh>
+                <mesh position={[0, stemHeight + 0.28 * capScale, 0]} scale={[1.62 * capScale, 0.82, 1.62 * capScale]}>
+                  <sphereGeometry args={[1, 16, 16]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={palette.secondary}
+                    depthWrite={false}
+                    opacity={0.09 + section.intensity * 0.04}
+                    transparent
+                  />
+                </mesh>
+                {[-0.28, 0, 0.28].map((strand, strandIndex) => (
+                  <mesh
+                    key={strand}
+                    position={[strand * capScale, stemHeight - 0.2, strandIndex % 2 === 0 ? -0.1 : 0.1]}
+                    rotation={[lean * 0.8 + strand * 0.3, 0, 0]}
+                  >
+                    <cylinderGeometry args={[0.018, 0.04, 0.58 + strandIndex * 0.16, 6]} />
+                    <meshBasicMaterial
+                      blending={THREE.AdditiveBlending}
+                      color={palette.light}
+                      depthWrite={false}
+                      opacity={0.18}
+                      transparent
+                    />
+                  </mesh>
+                ))}
+              </group>
+            );
+          }),
+        )}
+      </group>
+    </group>
+  );
+}
+
 function Track({
   level,
   snapshot,
@@ -1987,13 +2482,6 @@ function Track({
 
   return (
     <group ref={groupRef} position={[PLAYER_TRACK_X - snapshot.time * RUN_SPEED, 0, 0]}>
-      {visibleSections.map((section) => (
-        <SectionScenery
-          key={`${section.startTime}-${section.endTime}-${section.theme}-${section.kind}-${section.variant}`}
-          section={section}
-        />
-      ))}
-
       {lavaZones.map((zone) => (
         <LavaPool key={`${zone.startTime}-${zone.endTime}`} zone={zone} />
       ))}
@@ -2148,13 +2636,14 @@ function SceneContent({
   return (
     <>
       <color attach="background" args={[SECTION_PALETTES.pulse.fog]} />
-      <fog attach="fog" args={[SECTION_PALETTES.pulse.fog, 18, 108]} />
+      <fog attach="fog" args={[SECTION_PALETTES.pulse.fog, 26, 154]} />
       <Atmosphere level={level} snapshotRef={snapshotRef} />
-      <ambientLight intensity={0.44} />
-      <directionalLight color="#f5ffe8" intensity={1.55} position={[8, 18, 12]} />
-      <pointLight color="#ff8c4a" distance={32} intensity={3.1} position={[14, 4, -10]} />
+      <ambientLight intensity={0.3} />
+      <directionalLight color="#9fc2ff" intensity={1.08} position={[16, 22, 18]} />
+      <pointLight color="#7ad7ff" distance={38} intensity={1.85} position={[8, 8, -16]} />
       <CameraRig level={level} snapshotRef={snapshotRef} />
       <Backdrop level={level} snapshotRef={snapshotRef} />
+      <SpaceVista level={level} snapshotRef={snapshotRef} />
       <ParticleField level={level} snapshotRef={snapshotRef} />
       <Track level={level} snapshot={snapshot} snapshotRef={snapshotRef} />
       <Orb snapshotRef={snapshotRef} />

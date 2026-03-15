@@ -26,6 +26,13 @@ const ENERGY_SAMPLE_COUNT = 320;
 const BAR_BEAT_COUNT = 8;
 const LAVA_SURFACE_Y = 0.22;
 const SIMULATION_STEP = 1 / 180;
+const PLAYER_COLLISION_HEIGHT = PLAYER_COLLISION_RADIUS * (0.84 + 0.72);
+const MIN_STACK_PASSAGE_HEIGHT = PLAYER_COLLISION_HEIGHT + 0.14;
+const OVERHEAD_ESCAPE_TIME = 0.11;
+const OVERHEAD_JUMP_ASCENT =
+  JUMP_VELOCITY * OVERHEAD_ESCAPE_TIME -
+  0.5 * GRAVITY * HOLD_JUMP_GRAVITY_MULTIPLIER * OVERHEAD_ESCAPE_TIME * OVERHEAD_ESCAPE_TIME;
+const TARGET_OVERHEAD_PASSAGE_HEIGHT = PLAYER_COLLISION_HEIGHT + OVERHEAD_JUMP_ASCENT + 0.12;
 
 interface GridBeat {
   time: number;
@@ -649,7 +656,7 @@ function buildVaultGateObstacles(
   const blockWidth = clamp(2.24 + accent * 0.36, 2.24, 2.86);
   const blockHeight = clamp(1.18 + accent * 0.12, 1.18, 1.42);
   const beamWidth = clamp(3.16 + accent * 0.46, 3.16, 3.88);
-  const beamBaseY = clamp(2.92 + accent * 0.18, 2.92, 3.18);
+  const beamBaseY = blockHeight + TARGET_OVERHEAD_PASSAGE_HEIGHT;
 
   return [
     createBlockObstacle(beat, index, blockWidth, blockHeight, 0.148, 168, 0.58 + accent * 0.14, 0, leadBias),
@@ -979,7 +986,7 @@ function buildBridgeBar(
     barIndex * BAR_BEAT_COUNT + 152,
     4.36,
     0.42,
-    topHeights[1] + 1.14,
+    topHeights[1] + TARGET_OVERHEAD_PASSAGE_HEIGHT,
     0.16,
     228,
     0.46 + barEnergy * 0.14,
@@ -1086,7 +1093,7 @@ function buildGauntletBar(
     barIndex * BAR_BEAT_COUNT + 153,
     4.08,
     0.4,
-    4.12,
+    2.74 + TARGET_OVERHEAD_PASSAGE_HEIGHT,
     0.15,
     214,
     0.44 + barEnergy * 0.14,
@@ -1297,7 +1304,7 @@ function buildSpaceBar(
     barIndex * BAR_BEAT_COUNT + 252,
     3.88,
     0.38,
-    topHeights[2] + 1.06,
+    topHeights[2] + TARGET_OVERHEAD_PASSAGE_HEIGHT,
     0.15,
     244,
     0.48 + barEnergy * 0.14,
@@ -1411,7 +1418,7 @@ function buildDescentBar(
     barIndex * BAR_BEAT_COUNT + 352,
     4.14,
     0.4,
-    topHeights[3] + 1.08,
+    topHeights[3] + TARGET_OVERHEAD_PASSAGE_HEIGHT,
     0.15,
     208,
     0.46 + barEnergy * 0.14,
@@ -1493,17 +1500,73 @@ function obstacleTop(obstacle: Obstacle) {
   return obstacle.baseY + obstacle.height;
 }
 
-function obstaclesCanOverlap(previousObstacle: Obstacle, currentObstacle: Obstacle) {
+function obstaclesOverlapInTime(left: Obstacle, right: Obstacle) {
   return (
-    obstacleBottom(currentObstacle) >= obstacleTop(previousObstacle) - 0.04 ||
-    obstacleBottom(previousObstacle) >= obstacleTop(currentObstacle) - 0.04
+    obstacleStartTime(left) < obstacleEndTime(right) - 0.02 &&
+    obstacleStartTime(right) < obstacleEndTime(left) - 0.02
   );
+}
+
+function obstacleVerticalGap(left: Obstacle, right: Obstacle) {
+  if (obstacleBottom(right) >= obstacleTop(left) - 0.04) {
+    return obstacleBottom(right) - obstacleTop(left);
+  }
+
+  if (obstacleBottom(left) >= obstacleTop(right) - 0.04) {
+    return obstacleBottom(left) - obstacleTop(right);
+  }
+
+  return Number.NEGATIVE_INFINITY;
+}
+
+function isCeilingBeamObstacle(obstacle: Obstacle) {
+  return obstacle.kind === "block" && obstacle.baseY > 2.4 && obstacle.height <= 0.82;
+}
+
+function obstaclesCanOverlap(previousObstacle: Obstacle, currentObstacle: Obstacle) {
+  return obstacleVerticalGap(previousObstacle, currentObstacle) >= MIN_STACK_PASSAGE_HEIGHT;
 }
 
 function minimumObstacleWidth(obstacle: Obstacle) {
   return obstacle.kind === "spike"
     ? Math.max(1.16, obstacle.spikes * 0.56)
     : 2.3;
+}
+
+function normalizeOverheadBeamClearance(obstacles: Obstacle[]) {
+  return obstacles.map((obstacle, obstacleIndex) => {
+    if (!isCeilingBeamObstacle(obstacle)) {
+      return obstacle;
+    }
+
+    let requiredBaseY = obstacle.baseY;
+
+    for (let index = 0; index < obstacles.length; index += 1) {
+      if (index === obstacleIndex) {
+        continue;
+      }
+
+      const candidate = obstacles[index];
+
+      if (
+        !obstaclesOverlapInTime(obstacle, candidate) ||
+        obstacleBottom(candidate) >= obstacleBottom(obstacle)
+      ) {
+        continue;
+      }
+
+      requiredBaseY = Math.max(requiredBaseY, obstacleTop(candidate) + TARGET_OVERHEAD_PASSAGE_HEIGHT);
+    }
+
+    if (requiredBaseY <= obstacle.baseY + 0.001) {
+      return obstacle;
+    }
+
+    return {
+      ...obstacle,
+      baseY: requiredBaseY,
+    };
+  });
 }
 
 function normalizeObstacles(obstacles: Obstacle[], duration: number) {
@@ -1515,36 +1578,45 @@ function normalizeObstacles(obstacles: Obstacle[], duration: number) {
       break;
     }
 
-    let nextObstacle = obstacle;
-    const previousObstacle = normalized[normalized.length - 1];
+    let nextObstacle: Obstacle | null = obstacle;
 
-    if (previousObstacle) {
+    for (let index = normalized.length - 1; index >= 0; index -= 1) {
+      if (!nextObstacle) {
+        break;
+      }
+
+      const previousObstacle = normalized[index];
       const previousEnd = obstacleEndTime(previousObstacle);
-      const currentStart = obstacleStartTime(obstacle);
+      const currentStart = obstacleStartTime(nextObstacle);
 
-      if (currentStart < previousEnd - 0.02 && !obstaclesCanOverlap(previousObstacle, obstacle)) {
-        const maxAllowedWidth = (obstacle.time - (previousEnd + 0.02)) * RUN_SPEED * 2;
-        const minimumWidth = minimumObstacleWidth(obstacle);
+      if (currentStart >= previousEnd - 0.02) {
+        break;
+      }
+
+      if (!obstaclesCanOverlap(previousObstacle, nextObstacle)) {
+        const maxAllowedWidth: number = (nextObstacle.time - (previousEnd + 0.02)) * RUN_SPEED * 2;
+        const minimumWidth = minimumObstacleWidth(nextObstacle);
 
         if (maxAllowedWidth < minimumWidth) {
-          continue;
+          nextObstacle = null;
+          break;
         }
 
         nextObstacle = {
-          ...obstacle,
-          width: Math.min(obstacle.width, maxAllowedWidth),
+          ...nextObstacle,
+          width: Math.min(nextObstacle.width, maxAllowedWidth),
         };
       }
     }
 
-    if (obstacleStartTime(nextObstacle) >= duration - 0.95) {
+    if (!nextObstacle || obstacleStartTime(nextObstacle) >= duration - 0.95) {
       continue;
     }
 
     normalized.push(nextObstacle);
   }
 
-  return normalized;
+  return normalizeOverheadBeamClearance(normalized);
 }
 
 function normalizeLavaZones(lavaZones: LavaZone[], duration: number) {
@@ -2095,6 +2167,14 @@ function repairObstaclesNearCrash(obstacles: Obstacle[], crashWindowStart: numbe
     }
 
     changed = true;
+
+    if (isCeilingBeamObstacle(obstacle)) {
+      return {
+        ...obstacle,
+        baseY: obstacle.baseY + 0.42,
+        width: clamp(obstacle.width * 0.94, 2.4, 6.4),
+      };
+    }
 
     if (obstacle.kind === "spike") {
       return {
