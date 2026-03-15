@@ -9,7 +9,7 @@ import {
   JUMP_VELOCITY,
   LOW_JUMP_GRAVITY_MULTIPLIER,
   MAX_HOLD_JUMP_TIME,
-  PLAYER_RADIUS,
+  PLAYER_COLLISION_RADIUS,
   RUN_SPEED,
 } from "./constants";
 import { RhythmAudioEngine } from "./audioEngine";
@@ -125,8 +125,8 @@ function resolvePlayerCollisions(
   nextVelocity: number,
 ): CollisionResult {
   const overLava = isOverLava(lavaZones, time);
-  const bottomOffset = PLAYER_RADIUS * 0.84;
-  const topOffset = PLAYER_RADIUS * 0.72;
+  const bottomOffset = PLAYER_COLLISION_RADIUS * 0.84;
+  const topOffset = PLAYER_COLLISION_RADIUS * 0.72;
   const previousBottom = previousY - bottomOffset;
   const playerBottom = nextY - bottomOffset;
   const playerTop = nextY + topOffset;
@@ -144,7 +144,7 @@ function resolvePlayerCollisions(
 
   for (const obstacle of obstacles) {
     const relativeX = (obstacle.time - time) * RUN_SPEED;
-    const horizontalReach = obstacle.width / 2 + PLAYER_RADIUS;
+    const horizontalReach = obstacle.width / 2 + PLAYER_COLLISION_RADIUS;
 
     if (relativeX < -horizontalReach) {
       continue;
@@ -168,8 +168,8 @@ function resolvePlayerCollisions(
     }
 
     const halfWidth = obstacle.width / 2;
-    const withinTop = Math.abs(relativeX) < halfWidth + PLAYER_RADIUS * 0.62;
-    const withinBody = Math.abs(relativeX) < Math.max(0.12, halfWidth - PLAYER_RADIUS * 0.16);
+    const withinTop = Math.abs(relativeX) < halfWidth + PLAYER_COLLISION_RADIUS * 0.62;
+    const withinBody = Math.abs(relativeX) < Math.max(0.12, halfWidth - PLAYER_COLLISION_RADIUS * 0.16);
     const topSurface = obstacle.baseY + obstacle.height;
     const canLand =
       withinTop &&

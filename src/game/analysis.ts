@@ -6,7 +6,7 @@ import {
   HOLD_JUMP_GRAVITY_MULTIPLIER,
   JUMP_VELOCITY,
   LOW_JUMP_GRAVITY_MULTIPLIER,
-  PLAYER_RADIUS,
+  PLAYER_COLLISION_RADIUS,
   RUN_SPEED,
 } from "./constants";
 import type {
@@ -62,6 +62,7 @@ interface TrackProfile {
   groundPatternPhases: GroundPatternPhase[];
   sectionPhases: SectionPhase[];
   energyCameraStyles: CameraMoment["style"][];
+  obstacleLeadBias: number;
 }
 
 const DOWNBOY_PROFILE: TrackProfile = {
@@ -116,27 +117,28 @@ const DOWNBOY_PROFILE: TrackProfile = {
     },
     {
       untilProgress: 0.48,
-      cycle: ["ground", "climb", "bridge", "ground", "drop"],
+      cycle: ["ground", "climb", "bridge", "ground", "drop", "floating"],
       accentCycle: ["climb", "bridge", "tower"],
       lavaFloor: 0.3,
       accentEnergy: 0.7,
     },
     {
       untilProgress: 0.78,
-      cycle: ["climb", "bridge", "drop", "ground", "tower"],
-      accentCycle: ["tower", "gauntlet", "bridge"],
+      cycle: ["climb", "bridge", "drop", "ground", "tower", "descent"],
+      accentCycle: ["tower", "gauntlet", "space"],
       lavaFloor: 0.36,
       accentEnergy: 0.74,
     },
     {
       untilProgress: 1.01,
-      cycle: ["tower", "gauntlet", "drop", "floating", "bridge"],
-      accentCycle: ["tower", "gauntlet", "floating"],
+      cycle: ["tower", "gauntlet", "drop", "floating", "bridge", "space", "descent"],
+      accentCycle: ["tower", "gauntlet", "space", "descent"],
       lavaFloor: 0.28,
       accentEnergy: 0.76,
     },
   ],
   energyCameraStyles: ["rear", "rush", "sweep", "hero"],
+  obstacleLeadBias: 0.042,
 };
 
 const FOUND_DA_PROFILE: TrackProfile = {
@@ -191,27 +193,28 @@ const FOUND_DA_PROFILE: TrackProfile = {
     },
     {
       untilProgress: 0.42,
-      cycle: ["climb", "floating", "ground", "drop", "bridge"],
+      cycle: ["climb", "floating", "ground", "drop", "bridge", "descent"],
       accentCycle: ["tower", "floating", "drop"],
       lavaFloor: 0.34,
       accentEnergy: 0.7,
     },
     {
       untilProgress: 0.74,
-      cycle: ["tower", "drop", "climb", "bridge", "ground", "floating"],
-      accentCycle: ["tower", "gauntlet", "drop"],
+      cycle: ["tower", "drop", "climb", "bridge", "ground", "floating", "space"],
+      accentCycle: ["tower", "gauntlet", "drop", "space"],
       lavaFloor: 0.26,
       accentEnergy: 0.74,
     },
     {
       untilProgress: 1.01,
-      cycle: ["tower", "gauntlet", "tower", "floating", "drop", "bridge"],
-      accentCycle: ["tower", "gauntlet", "floating"],
+      cycle: ["tower", "gauntlet", "tower", "floating", "drop", "bridge", "space", "descent"],
+      accentCycle: ["tower", "gauntlet", "floating", "space"],
       lavaFloor: 0.22,
       accentEnergy: 0.76,
     },
   ],
   energyCameraStyles: ["hero", "sweep", "rear", "rush"],
+  obstacleLeadBias: 0.026,
 };
 
 const SECTION_THEME_POOLS: Record<SectionType, LevelSectionTheme[]> = {
@@ -222,6 +225,8 @@ const SECTION_THEME_POOLS: Record<SectionType, LevelSectionTheme[]> = {
   gauntlet: ["forge", "void"],
   floating: ["sky", "prism"],
   tower: ["citadel", "forge"],
+  space: ["void", "sky"],
+  descent: ["solar", "forge"],
 };
 
 function getTrackProfile(trackId: TrackId): TrackProfile {
@@ -521,10 +526,11 @@ function createSpikeObstacle(
   hueBase: number,
   glow: number,
   baseY = 0,
+  leadBias = 0,
 ) {
   return {
     kind: "spike" as const,
-    time: createObstacleCenterTime(beat.time + frontDelay, width),
+    time: createObstacleCenterTime(beat.time + frontDelay + leadBias, width),
     baseY,
     width,
     height,
@@ -543,10 +549,11 @@ function createBlockObstacle(
   hueBase: number,
   glow: number,
   baseY = 0,
+  leadBias = 0,
 ) {
   return {
     kind: "block" as const,
-    time: createObstacleCenterTime(beat.time + frontDelay, width),
+    time: createObstacleCenterTime(beat.time + frontDelay + leadBias, width),
     baseY,
     width,
     height,
@@ -565,6 +572,7 @@ function createPlatformBlock(
   frontDelay: number,
   hueBase: number,
   glow: number,
+  leadBias = 0,
 ) {
   const safeThickness = clamp(thickness, 0.32, 1.8);
   const safeTopY = Math.max(safeThickness + 0.16, topY);
@@ -578,6 +586,7 @@ function createPlatformBlock(
     hueBase,
     glow,
     safeTopY - safeThickness,
+    leadBias,
   );
 }
 
@@ -591,6 +600,7 @@ function createPlatformSpike(
   hueBase: number,
   glow: number,
   baseY: number,
+  leadBias = 0,
 ) {
   return createSpikeObstacle(
     beat,
@@ -602,7 +612,49 @@ function createPlatformSpike(
     hueBase,
     glow,
     baseY,
+    leadBias,
   );
+}
+
+function createCeilingBeamObstacle(
+  beat: GridBeat,
+  index: number,
+  width: number,
+  height: number,
+  baseY: number,
+  frontDelay: number,
+  hueBase: number,
+  glow: number,
+  leadBias = 0,
+) {
+  return createBlockObstacle(
+    beat,
+    index,
+    clamp(width, 2.2, 6.8),
+    clamp(height, 0.34, 0.82),
+    frontDelay,
+    hueBase,
+    glow,
+    clamp(baseY, 2.42, 6.8),
+    leadBias,
+  );
+}
+
+function buildVaultGateObstacles(
+  beat: GridBeat,
+  index: number,
+  accent: number,
+  leadBias: number,
+) {
+  const blockWidth = clamp(2.24 + accent * 0.36, 2.24, 2.86);
+  const blockHeight = clamp(1.18 + accent * 0.12, 1.18, 1.42);
+  const beamWidth = clamp(3.16 + accent * 0.46, 3.16, 3.88);
+  const beamBaseY = clamp(2.92 + accent * 0.18, 2.92, 3.18);
+
+  return [
+    createBlockObstacle(beat, index, blockWidth, blockHeight, 0.148, 168, 0.58 + accent * 0.14, 0, leadBias),
+    createCeilingBeamObstacle(beat, index + 4000, beamWidth, 0.42, beamBaseY, 0.17, 206, 0.48 + accent * 0.14, leadBias),
+  ];
 }
 
 function buildTokenObstacles(
@@ -611,6 +663,7 @@ function buildTokenObstacles(
   index: number,
   sectionProgress: number,
   barEnergy: number,
+  leadBias: number,
 ) {
   const accent = clamp(beat.strength * 0.72 + barEnergy * 0.28 + sectionProgress * 0.18, 0.34, 1);
 
@@ -620,7 +673,7 @@ function buildTokenObstacles(
     const height = clamp(1.56 + spikes * 0.14 + accent * 0.12, 1.56, 1.98);
 
     return [
-      createSpikeObstacle(beat, index, width, height, spikes, 0.1, 18, 0.58 + accent * 0.18),
+      createSpikeObstacle(beat, index, width, height, spikes, 0.1, 18, 0.58 + accent * 0.18, 0, leadBias),
     ];
   }
 
@@ -630,16 +683,20 @@ function buildTokenObstacles(
     const height = clamp(1.86 + spikes * 0.14 + accent * 0.16, 1.94, 2.34);
 
     return [
-      createSpikeObstacle(beat, index, width, height, spikes, 0.148, 10, 0.7 + accent * 0.18),
+      createSpikeObstacle(beat, index, width, height, spikes, 0.148, 10, 0.7 + accent * 0.18, 0, leadBias),
     ];
   }
 
   if (token === "step") {
+    if (sectionProgress > 0.34 && accent > 0.7 && index % 7 === 3) {
+      return buildVaultGateObstacles(beat, index, accent, leadBias);
+    }
+
     const width = clamp(3.7 + accent * 0.42, 3.7, 4.4);
     const height = clamp(1.18 + accent * 0.18, 1.18, 1.52);
 
     return [
-      createBlockObstacle(beat, index, width, height, 0.16, 178, 0.5 + accent * 0.18),
+      createBlockObstacle(beat, index, width, height, 0.16, 178, 0.5 + accent * 0.18, 0, leadBias),
     ];
   }
 
@@ -647,7 +704,7 @@ function buildTokenObstacles(
   const height = clamp(1.2 + accent * 0.14, 1.2, 1.48);
 
   return [
-    createBlockObstacle(beat, index, width, height, 0.18, 194, 0.54 + accent * 0.2),
+    createBlockObstacle(beat, index, width, height, 0.18, 194, 0.54 + accent * 0.2, 0, leadBias),
   ];
 }
 
@@ -669,6 +726,7 @@ function buildGroundBar(
   barIndex: number,
   sectionProgress: number,
   barEnergy: number,
+  leadBias: number,
 ) {
   const patternPool = getGroundPatternPool(profile, sectionProgress, barIndex);
   const pattern = patternPool[(barIndex + Math.round(barEnergy * 4)) % patternPool.length];
@@ -684,7 +742,16 @@ function buildGroundBar(
     }
 
     cues.push(createCue(beat, token));
-    obstacles.push(...buildTokenObstacles(token, beat, barIndex * BAR_BEAT_COUNT + beatOffset, sectionProgress, barEnergy));
+    obstacles.push(
+      ...buildTokenObstacles(
+        token,
+        beat,
+        barIndex * BAR_BEAT_COUNT + beatOffset,
+        sectionProgress,
+        barEnergy,
+        leadBias,
+      ),
+    );
   }
 
   return {
@@ -695,12 +762,13 @@ function buildGroundBar(
   } satisfies GeneratedBar;
 }
 
-function createLavaZoneForObstacles(
+function createHazardZoneForObstacles(
   obstacles: Obstacle[],
   intensity: number,
   hue: number,
   leadTrim: number,
   trailTrim: number,
+  surface: LavaZone["surface"] = "lava",
 ) {
   const firstObstacle = obstacles[0];
   const lastObstacle = obstacles[obstacles.length - 1];
@@ -714,6 +782,7 @@ function createLavaZoneForObstacles(
     endTime: obstacleEndTime(lastObstacle) - trailTrim,
     intensity,
     hue,
+    surface,
   } satisfies LavaZone;
 }
 
@@ -723,17 +792,18 @@ function buildClimbBar(
   sectionProgress: number,
   barEnergy: number,
   useLava: boolean,
+  leadBias: number,
 ) {
   const cueOffsets = [0, 1, 2, 3, 4];
   const topHeights = [
-    1.24,
-    clamp(1.82 + barEnergy * 0.12, 1.82, 2.02),
-    clamp(2.34 + barEnergy * 0.15, 2.34, 2.58),
-    clamp(2.88 + sectionProgress * 0.16 + barEnergy * 0.1, 2.88, 3.24),
-    1.32 + sectionProgress * 0.06,
+    1.28,
+    clamp(2.16 + barEnergy * 0.14, 2.16, 2.44),
+    clamp(3.04 + barEnergy * 0.16, 3.04, 3.36),
+    clamp(4.04 + sectionProgress * 0.24 + barEnergy * 0.14, 4.04, 4.56),
+    1.44 + sectionProgress * 0.08,
   ];
-  const widths = [6.1, 5.6, 5.3, 5.1, 6.2];
-  const thicknesses = [1.24, 0.46, 0.42, 0.38, 1.24];
+  const widths = [5.9, 4.8, 4.4, 4.0, 6.1];
+  const thicknesses = [1.18, 0.42, 0.38, 0.34, 1.12];
   const cues = cueOffsets.map((offset, index) =>
     createCue(
       barBeats[offset],
@@ -751,15 +821,17 @@ function buildClimbBar(
       0.14 + index * 0.006,
       164,
       0.64 + barEnergy * 0.18,
+      leadBias,
     ),
   );
   const lavaZone = useLava
-    ? createLavaZoneForObstacles(
+    ? createHazardZoneForObstacles(
         obstacles,
         0.68 + barEnergy * 0.22,
         12 + ((barIndex * 9) % 22),
         0.1,
         0.46,
+        sectionProgress > 0.62 ? "void" : "lava",
       )
     : null;
 
@@ -781,19 +853,21 @@ function buildClimbBar(
 function buildDropBar(
   barBeats: GridBeat[],
   barIndex: number,
+  sectionProgress: number,
   barEnergy: number,
   useLava: boolean,
+  leadBias: number,
 ) {
   const cueOffsets = [0, 1, 2, 3, 4];
   const topHeights = [
-    1.38,
-    clamp(2.48 + barEnergy * 0.14, 2.48, 2.72),
-    clamp(2.06 + barEnergy * 0.1, 2.06, 2.24),
-    1.62,
-    1.22,
+    1.4,
+    clamp(3.18 + barEnergy * 0.18, 3.18, 3.5),
+    clamp(2.68 + barEnergy * 0.12, 2.68, 2.94),
+    clamp(1.92 + sectionProgress * 0.12, 1.92, 2.16),
+    1.24,
   ];
-  const widths = [5.9, 5.0, 4.9, 5.2, 6.1];
-  const thicknesses = [1.08, 0.42, 0.4, 0.4, 1.22];
+  const widths = [6.0, 4.4, 4.2, 4.6, 6.2];
+  const thicknesses = [1.08, 0.38, 0.36, 0.36, 1.18];
   const cues = cueOffsets.map((offset, index) =>
     createCue(
       barBeats[offset],
@@ -811,15 +885,17 @@ function buildDropBar(
       0.14 + index * 0.006,
       202,
       0.54 + barEnergy * 0.16,
+      leadBias,
     ),
   );
   const lavaZone = useLava
-    ? createLavaZoneForObstacles(
+    ? createHazardZoneForObstacles(
         obstacles,
         0.58 + barEnergy * 0.16,
         18 + ((barIndex * 7) % 18),
         0.08,
         0.42,
+        barEnergy > 0.7 ? "void" : "lava",
       )
     : null;
 
@@ -843,10 +919,11 @@ function buildBridgeBar(
   barIndex: number,
   barEnergy: number,
   useLava: boolean,
+  leadBias: number,
 ) {
-  const topHeights = [1.34, 1.94, 1.28];
-  const widths = [6.3, 5.4, 6.2];
-  const thicknesses = [1.12, 0.42, 1.18];
+  const topHeights = [1.46, 3.02, 1.34];
+  const widths = [5.8, 4.1, 6.4];
+  const thicknesses = [1.06, 0.34, 1.14];
   const cues = [
     createCue(barBeats[0], "bridge", 0),
     createCue(barBeats[1], "climb", 1),
@@ -861,6 +938,7 @@ function buildBridgeBar(
     0.14,
     188,
     0.58 + barEnergy * 0.18,
+    leadBias,
   );
   const platformTwo = createPlatformBlock(
     barBeats[1],
@@ -871,6 +949,7 @@ function buildBridgeBar(
     0.14,
     196,
     0.6 + barEnergy * 0.18,
+    leadBias,
   );
   const exitPlatform = createPlatformBlock(
     barBeats[2],
@@ -881,6 +960,7 @@ function buildBridgeBar(
     0.14,
     202,
     0.52 + barEnergy * 0.16,
+    leadBias,
   );
   const platformSpike = createPlatformSpike(
     barBeats[2],
@@ -892,20 +972,34 @@ function buildBridgeBar(
     16,
     0.72 + barEnergy * 0.16,
     topHeights[1] - 0.02,
+    leadBias,
+  );
+  const overheadGate = createCeilingBeamObstacle(
+    barBeats[1],
+    barIndex * BAR_BEAT_COUNT + 152,
+    4.36,
+    0.42,
+    topHeights[1] + 1.14,
+    0.16,
+    228,
+    0.46 + barEnergy * 0.14,
+    leadBias,
   );
   const obstacles = [
     platformOne,
     platformTwo,
+    overheadGate,
     exitPlatform,
     platformSpike,
   ];
   const lavaZone = useLava
-    ? createLavaZoneForObstacles(
+    ? createHazardZoneForObstacles(
         [platformOne, platformTwo, exitPlatform],
         0.58 + barEnergy * 0.18,
         18 + ((barIndex * 11) % 18),
         0.08,
         0.4,
+        "void",
       )
     : null;
 
@@ -929,65 +1023,83 @@ function buildGauntletBar(
   barIndex: number,
   barEnergy: number,
   useLava: boolean,
+  leadBias: number,
 ) {
   const platformOne = createPlatformBlock(
     barBeats[0],
     barIndex * BAR_BEAT_COUNT,
-    6.6,
-    1.42,
-    1.04,
+    6.2,
+    1.48,
+    1.02,
     0.14,
     172,
     0.62 + barEnergy * 0.18,
+    leadBias,
   );
   const midStep = createPlatformBlock(
     barBeats[1],
     barIndex * BAR_BEAT_COUNT + 1,
-    5.2,
-    2.46,
-    0.38,
+    4.8,
+    2.74,
+    0.36,
     0.14,
     184,
     0.56 + barEnergy * 0.16,
+    leadBias,
   );
   const highStep = createPlatformBlock(
     barBeats[2],
     barIndex * BAR_BEAT_COUNT + 2,
-    5.0,
-    3.04,
-    0.36,
+    4.1,
+    3.78,
+    0.34,
     0.14,
     190,
     0.58 + barEnergy * 0.16,
+    leadBias,
   );
   const platformSpike = createPlatformSpike(
     barBeats[3],
     barIndex * BAR_BEAT_COUNT + 103,
     1.24,
-    0.98,
+    1.04,
     1,
     0.08,
     14,
     0.74 + barEnergy * 0.18,
-    3.04,
+    3.76,
+    leadBias,
   );
   const exitPlatform = createPlatformBlock(
     barBeats[4],
     barIndex * BAR_BEAT_COUNT + 4,
-    6.0,
-    1.26,
-    1.26,
+    6.3,
+    1.42,
+    1.16,
     0.14,
     196,
     0.52 + barEnergy * 0.14,
+    leadBias,
+  );
+  const chokeBeam = createCeilingBeamObstacle(
+    barBeats[1],
+    barIndex * BAR_BEAT_COUNT + 153,
+    4.08,
+    0.4,
+    4.12,
+    0.15,
+    214,
+    0.44 + barEnergy * 0.14,
+    leadBias,
   );
   const lavaZone = useLava
-    ? createLavaZoneForObstacles(
+    ? createHazardZoneForObstacles(
         [platformOne, midStep, highStep, exitPlatform],
         0.7 + barEnergy * 0.16,
         10 + ((barIndex * 5) % 26),
         0.08,
         0.44,
+        barEnergy > 0.68 ? "void" : "lava",
       )
     : null;
 
@@ -998,7 +1110,7 @@ function buildGauntletBar(
       createCue(barBeats[2], "climb", 2),
       createCue(barBeats[3], "tap", 1),
     ],
-    obstacles: [platformOne, midStep, highStep, platformSpike, exitPlatform],
+    obstacles: [platformOne, midStep, chokeBeam, highStep, platformSpike, exitPlatform],
     lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
@@ -1016,11 +1128,12 @@ function buildFloatingStepsBar(
   barIndex: number,
   barEnergy: number,
   useLava: boolean,
+  leadBias: number,
 ) {
   const cueOffsets = [0, 1, 2, 3, 4];
-  const topHeights = [1.4, 2.04, 2.62, 2.18, 1.28];
-  const widths = [5.7, 5.0, 4.8, 4.9, 6.0];
-  const thicknesses = [1.04, 0.36, 0.34, 0.34, 1.18];
+  const topHeights = [1.58, 3.02, 4.18, 3.42, 1.42];
+  const widths = [5.4, 4.2, 3.7, 4.0, 6.1];
+  const thicknesses = [1.0, 0.34, 0.3, 0.32, 1.14];
   const obstacles = cueOffsets.map((offset, index) =>
     createPlatformBlock(
       barBeats[offset],
@@ -1031,15 +1144,17 @@ function buildFloatingStepsBar(
       0.14 + index * 0.006,
       204,
       0.5 + barEnergy * 0.14,
+      leadBias,
     ),
   );
   const lavaZone = useLava
-    ? createLavaZoneForObstacles(
+    ? createHazardZoneForObstacles(
         obstacles,
         0.62 + barEnergy * 0.14,
         20 + ((barIndex * 9) % 14),
         0.08,
         0.42,
+        "void",
       )
     : null;
 
@@ -1070,18 +1185,19 @@ function buildTowerBar(
   sectionProgress: number,
   barEnergy: number,
   useLava: boolean,
+  leadBias: number,
 ) {
   const cueOffsets = [0, 1, 2, 3, 4, 5];
   const topHeights = [
-    1.26,
-    clamp(1.96 + barEnergy * 0.12, 1.96, 2.14),
-    clamp(2.52 + barEnergy * 0.14, 2.52, 2.72),
-    clamp(3.02 + sectionProgress * 0.18 + barEnergy * 0.1, 3.02, 3.32),
-    clamp(3.34 + sectionProgress * 0.2 + barEnergy * 0.1, 3.34, 3.58),
-    1.36,
+    1.32,
+    clamp(2.34 + barEnergy * 0.14, 2.34, 2.64),
+    clamp(3.28 + barEnergy * 0.16, 3.28, 3.6),
+    clamp(4.18 + sectionProgress * 0.24 + barEnergy * 0.12, 4.18, 4.68),
+    clamp(4.94 + sectionProgress * 0.28 + barEnergy * 0.14, 4.94, 5.42),
+    1.48,
   ];
-  const widths = [6.2, 5.6, 5.2, 4.9, 4.7, 6.3];
-  const thicknesses = [1.22, 0.44, 0.4, 0.36, 0.34, 1.2];
+  const widths = [6.0, 4.7, 4.2, 3.8, 3.4, 6.2];
+  const thicknesses = [1.16, 0.38, 0.34, 0.32, 0.28, 1.12];
   const obstacles = cueOffsets.map((offset, index) =>
     createPlatformBlock(
       barBeats[offset],
@@ -1092,26 +1208,29 @@ function buildTowerBar(
       0.14 + index * 0.004,
       176,
       0.56 + barEnergy * 0.16,
+      leadBias,
     ),
   );
   const crestSpike = createPlatformSpike(
     barBeats[5],
     barIndex * BAR_BEAT_COUNT + 105,
-    1.16,
-    0.9,
+    1.04,
+    0.88,
     1,
     0.08,
     16,
     0.72 + barEnergy * 0.16,
     topHeights[4] - 0.02,
+    leadBias,
   );
   const lavaZone = useLava
-    ? createLavaZoneForObstacles(
+    ? createHazardZoneForObstacles(
         obstacles,
         0.72 + barEnergy * 0.18,
         14 + ((barIndex * 13) % 18),
         0.1,
         0.48,
+        "void",
       )
     : null;
 
@@ -1137,6 +1256,198 @@ function buildTowerBar(
         duration: 0.74,
         strength: 0.7 + barEnergy * 0.12,
         style: "rush",
+      },
+    ],
+  } satisfies GeneratedBar;
+}
+
+function buildSpaceBar(
+  barBeats: GridBeat[],
+  barIndex: number,
+  sectionProgress: number,
+  barEnergy: number,
+  leadBias: number,
+) {
+  const cueOffsets = [0, 1, 2, 3, 4, 5];
+  const topHeights = [
+    1.36,
+    clamp(2.48 + barEnergy * 0.16, 2.48, 2.8),
+    clamp(3.54 + barEnergy * 0.18, 3.54, 3.88),
+    clamp(4.52 + sectionProgress * 0.2 + barEnergy * 0.16, 4.52, 4.96),
+    clamp(5.18 + sectionProgress * 0.24 + barEnergy * 0.14, 5.18, 5.62),
+    1.62,
+  ];
+  const widths = [5.9, 4.6, 4.0, 3.6, 3.2, 6.2];
+  const thicknesses = [1.04, 0.34, 0.32, 0.28, 0.26, 1.1];
+  const obstacles = cueOffsets.map((offset, index) =>
+    createPlatformBlock(
+      barBeats[offset],
+      barIndex * BAR_BEAT_COUNT + offset,
+      widths[index],
+      topHeights[index],
+      thicknesses[index],
+      0.14 + index * 0.004,
+      224,
+      0.6 + barEnergy * 0.18,
+      leadBias,
+    ),
+  );
+  const crestBeam = createCeilingBeamObstacle(
+    barBeats[2],
+    barIndex * BAR_BEAT_COUNT + 252,
+    3.88,
+    0.38,
+    topHeights[2] + 1.06,
+    0.15,
+    244,
+    0.48 + barEnergy * 0.14,
+    leadBias,
+  );
+  const crestSpike = createPlatformSpike(
+    barBeats[4],
+    barIndex * BAR_BEAT_COUNT + 204,
+    0.96,
+    0.82,
+    1,
+    0.08,
+    340,
+    0.76 + barEnergy * 0.12,
+    topHeights[4] - 0.02,
+    leadBias,
+  );
+  const descentSpike = createPlatformSpike(
+    barBeats[5],
+    barIndex * BAR_BEAT_COUNT + 205,
+    1.04,
+    0.86,
+    1,
+    0.08,
+    330,
+    0.7 + barEnergy * 0.1,
+    topHeights[4] - 0.04,
+    leadBias,
+  );
+  const voidZone = createHazardZoneForObstacles(
+    obstacles,
+    0.74 + barEnergy * 0.18,
+    236 + ((barIndex * 7) % 36),
+    0.08,
+    0.46,
+    "void",
+  );
+
+  return {
+    cues: cueOffsets.map((offset, index) =>
+      createCue(
+        barBeats[offset],
+        index === cueOffsets.length - 1 ? "step" : index < 2 ? "step" : "climb",
+        2 - index,
+      ),
+    ),
+    obstacles: [...obstacles, crestBeam, crestSpike, descentSpike],
+    lavaZones: voidZone ? [voidZone] : [],
+    cameraMoments: [
+      {
+        time: barBeats[3]?.time ?? barBeats[2].time,
+        duration: 1.02,
+        strength: 0.78 + barEnergy * 0.12,
+        style: "hero",
+      },
+      {
+        time: barBeats[4]?.time ?? barBeats[3].time,
+        duration: 0.8,
+        strength: 0.74 + barEnergy * 0.12,
+        style: "rush",
+      },
+    ],
+  } satisfies GeneratedBar;
+}
+
+function buildDescentBar(
+  barBeats: GridBeat[],
+  barIndex: number,
+  sectionProgress: number,
+  barEnergy: number,
+  leadBias: number,
+) {
+  const cueOffsets = [0, 1, 2, 3, 4, 5];
+  const topHeights = [
+    1.42,
+    clamp(2.96 + barEnergy * 0.16, 2.96, 3.28),
+    clamp(4.12 + sectionProgress * 0.18 + barEnergy * 0.14, 4.12, 4.56),
+    clamp(3.18 + barEnergy * 0.12, 3.18, 3.42),
+    clamp(2.16 + sectionProgress * 0.1, 2.16, 2.42),
+    1.26,
+  ];
+  const widths = [5.8, 4.6, 4.1, 4.2, 4.9, 6.2];
+  const thicknesses = [1.04, 0.36, 0.32, 0.34, 0.36, 1.1];
+  const obstacles = cueOffsets.map((offset, index) =>
+    createPlatformBlock(
+      barBeats[offset],
+      barIndex * BAR_BEAT_COUNT + offset,
+      widths[index],
+      topHeights[index],
+      thicknesses[index],
+      0.14 + index * 0.004,
+      24,
+      0.56 + barEnergy * 0.16,
+      leadBias,
+    ),
+  );
+  const edgeSpike = createPlatformSpike(
+    barBeats[2],
+    barIndex * BAR_BEAT_COUNT + 302,
+    1.08,
+    0.92,
+    1,
+    0.08,
+    18,
+    0.72 + barEnergy * 0.14,
+    topHeights[2] - 0.02,
+    leadBias,
+  );
+  const descentBeam = createCeilingBeamObstacle(
+    barBeats[3],
+    barIndex * BAR_BEAT_COUNT + 352,
+    4.14,
+    0.4,
+    topHeights[3] + 1.08,
+    0.15,
+    208,
+    0.46 + barEnergy * 0.14,
+    leadBias,
+  );
+  const voidZone = createHazardZoneForObstacles(
+    obstacles,
+    0.7 + barEnergy * 0.16,
+    18 + ((barIndex * 9) % 26),
+    0.08,
+    0.44,
+    "void",
+  );
+
+  return {
+    cues: cueOffsets.map((offset, index) =>
+      createCue(
+        barBeats[offset],
+        index === 0 || index >= 4 ? "step" : index === 2 ? "climb" : "bridge",
+        2 - index,
+      ),
+    ),
+    obstacles: [...obstacles, descentBeam, edgeSpike],
+    lavaZones: voidZone ? [voidZone] : [],
+    cameraMoments: [
+      {
+        time: barBeats[2]?.time ?? barBeats[1].time,
+        duration: 0.94,
+        strength: 0.72 + barEnergy * 0.12,
+        style: "sweep",
+      },
+      {
+        time: barBeats[4]?.time ?? barBeats[3].time,
+        duration: 0.72,
+        strength: 0.68 + barEnergy * 0.1,
+        style: "hero",
       },
     ],
   } satisfies GeneratedBar;
@@ -1250,13 +1561,18 @@ function normalizeLavaZones(lavaZones: LavaZone[], duration: number) {
   for (const zone of sorted) {
     const previous = merged[merged.length - 1];
 
-    if (!previous || zone.startTime > previous.endTime + 0.12) {
+    if (
+      !previous ||
+      zone.surface !== previous.surface ||
+      zone.startTime > previous.endTime + 0.12
+    ) {
       merged.push(zone);
       continue;
     }
 
     previous.endTime = Math.max(previous.endTime, zone.endTime);
     previous.intensity = Math.max(previous.intensity, zone.intensity);
+    previous.hue = (previous.hue + zone.hue) * 0.5;
   }
 
   return merged;
@@ -1295,11 +1611,14 @@ function chooseSectionType(
   const seed = barIndex + Math.round(barEnergy * 8) + Math.round(sectionProgress * 5);
   let candidate = candidatePool[seed % candidatePool.length] ?? "ground";
 
-  if (sectionProgress < 0.2 && (candidate === "gauntlet" || candidate === "tower")) {
+  if (
+    sectionProgress < 0.26 &&
+    (candidate === "gauntlet" || candidate === "tower" || candidate === "space")
+  ) {
     candidate = "climb";
   }
 
-  if (sectionProgress < 0.14 && candidate === "floating") {
+  if (sectionProgress < 0.18 && (candidate === "floating" || candidate === "descent")) {
     candidate = "ground";
   }
 
@@ -1466,23 +1785,28 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number, trackId: Trac
       recentThemes,
     );
     const useLava = sectionProgress >= sectionPhase.lavaFloor && sectionType !== "ground";
+    const leadBias = profile.obstacleLeadBias;
     const sectionVariant =
       (barIndex + Math.round(barEnergy * 10) + Math.round(sectionProgress * 12) + getTrackThemeOffset(profile)) %
       3;
     const generatedBar =
       sectionType === "climb"
-        ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy, useLava)
+        ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy, useLava, leadBias)
         : sectionType === "drop"
-          ? buildDropBar(barBeats, barIndex, barEnergy, useLava)
+          ? buildDropBar(barBeats, barIndex, sectionProgress, barEnergy, useLava, leadBias)
           : sectionType === "gauntlet"
-            ? buildGauntletBar(barBeats, barIndex, barEnergy, true)
+            ? buildGauntletBar(barBeats, barIndex, barEnergy, true, leadBias)
             : sectionType === "bridge"
-              ? buildBridgeBar(barBeats, barIndex, barEnergy, useLava)
+              ? buildBridgeBar(barBeats, barIndex, barEnergy, useLava, leadBias)
               : sectionType === "floating"
-                ? buildFloatingStepsBar(barBeats, barIndex, barEnergy, useLava)
+                ? buildFloatingStepsBar(barBeats, barIndex, barEnergy, useLava, leadBias)
                 : sectionType === "tower"
-                  ? buildTowerBar(barBeats, barIndex, sectionProgress, barEnergy, useLava)
-                  : buildGroundBar(profile, barBeats, barIndex, sectionProgress, barEnergy);
+                  ? buildTowerBar(barBeats, barIndex, sectionProgress, barEnergy, useLava, leadBias)
+                  : sectionType === "space"
+                    ? buildSpaceBar(barBeats, barIndex, sectionProgress, barEnergy, leadBias)
+                    : sectionType === "descent"
+                      ? buildDescentBar(barBeats, barIndex, sectionProgress, barEnergy, leadBias)
+                      : buildGroundBar(profile, barBeats, barIndex, sectionProgress, barEnergy, leadBias);
     const energyMoment = createEnergyCameraMoment(
       profile,
       barBeats,
@@ -1571,8 +1895,8 @@ function resolveSimulatedCollisions(
   nextVelocity: number,
 ) {
   const overLava = isOverLava(lavaZones, time);
-  const bottomOffset = PLAYER_RADIUS * 0.84;
-  const topOffset = PLAYER_RADIUS * 0.72;
+  const bottomOffset = PLAYER_COLLISION_RADIUS * 0.84;
+  const topOffset = PLAYER_COLLISION_RADIUS * 0.72;
   const previousBottom = previousY - bottomOffset;
   const playerBottom = nextY - bottomOffset;
   const playerTop = nextY + topOffset;
@@ -1590,7 +1914,7 @@ function resolveSimulatedCollisions(
 
   for (const obstacle of obstacles) {
     const relativeX = (obstacle.time - time) * RUN_SPEED;
-    const horizontalReach = obstacle.width / 2 + PLAYER_RADIUS;
+    const horizontalReach = obstacle.width / 2 + PLAYER_COLLISION_RADIUS;
 
     if (relativeX < -horizontalReach) {
       continue;
@@ -1614,8 +1938,8 @@ function resolveSimulatedCollisions(
     }
 
     const halfWidth = obstacle.width / 2;
-    const withinTop = Math.abs(relativeX) < halfWidth + PLAYER_RADIUS * 0.62;
-    const withinBody = Math.abs(relativeX) < Math.max(0.12, halfWidth - PLAYER_RADIUS * 0.16);
+    const withinTop = Math.abs(relativeX) < halfWidth + PLAYER_COLLISION_RADIUS * 0.62;
+    const withinBody = Math.abs(relativeX) < Math.max(0.12, halfWidth - PLAYER_COLLISION_RADIUS * 0.16);
     const topSurface = obstacle.baseY + obstacle.height;
     const canLand =
       withinTop &&

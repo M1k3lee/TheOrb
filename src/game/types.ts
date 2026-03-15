@@ -14,7 +14,9 @@ export type LevelSectionKind =
   | "bridge"
   | "gauntlet"
   | "floating"
-  | "tower";
+  | "tower"
+  | "space"
+  | "descent";
 export type LevelSectionTheme =
   | "pulse"
   | "solar"
@@ -47,6 +49,7 @@ export interface LavaZone {
   endTime: number;
   intensity: number;
   hue: number;
+  surface: "lava" | "void";
 }
 
 export interface LevelSection {

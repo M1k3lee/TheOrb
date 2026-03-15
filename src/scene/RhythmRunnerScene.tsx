@@ -4,7 +4,7 @@ import { useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import {
   GROUND_Y,
-  PLAYER_RADIUS,
+  PLAYER_VISUAL_RADIUS,
   PLAYER_TRACK_X,
   RUN_SPEED,
 } from "../game/constants";
@@ -21,22 +21,24 @@ import type {
 } from "../game/types";
 
 const BACKDROP_VERTEX_SHADER = `
-  varying vec2 vUv;
+  varying vec3 vWorldPosition;
 
   void main() {
-    vUv = uv;
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = worldPosition.xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
 const BACKDROP_FRAGMENT_SHADER = `
-  varying vec2 vUv;
+  varying vec3 vWorldPosition;
 
   uniform float uTime;
   uniform float uBass;
   uniform float uMid;
   uniform float uTreble;
   uniform float uCrash;
+  uniform float uIntensity;
   uniform vec3 uDeep;
   uniform vec3 uPrimary;
   uniform vec3 uSecondary;
@@ -58,23 +60,44 @@ const BACKDROP_FRAGMENT_SHADER = `
     return mix(mix(a, b, smoothLocal.x), mix(c, d, smoothLocal.x), smoothLocal.y);
   }
 
+  float fbm(vec2 p) {
+    float value = 0.0;
+    float amplitude = 0.5;
+
+    for (int octave = 0; octave < 4; octave++) {
+      value += noise(p) * amplitude;
+      p = p * 2.02 + vec2(9.1, 3.7);
+      amplitude *= 0.52;
+    }
+
+    return value;
+  }
+
   void main() {
-    vec2 uv = vUv * 2.0 - 1.0;
-    float time = uTime * 0.2;
-    float flow = sin(uv.x * 3.2 + time * 2.4) * 0.15 + sin(uv.y * 5.4 - time * 1.4) * 0.12;
-    float field = noise(uv * 2.8 + vec2(time * 0.8, -time * 0.3));
-    float ribbon = smoothstep(0.72 + uBass * 0.25, 0.02, abs(uv.y + flow + field * 0.35));
-    float bloomBand = smoothstep(0.52, 0.0, length(uv - vec2(-0.25, 0.22 + uMid * 0.08)));
+    vec3 direction = normalize(vWorldPosition - cameraPosition);
+    vec2 sphereUv = vec2(
+      atan(direction.z, direction.x) / 6.28318530718 + 0.5,
+      direction.y * 0.5 + 0.5
+    );
+    float time = uTime * 0.035;
+    float field = fbm(sphereUv * vec2(6.2, 3.4) + vec2(time * 0.9, -time * 0.3));
+    float ribbonField = fbm(vec2(sphereUv.x * 10.0 - time * 1.2, sphereUv.y * 3.8 + time * 0.25));
+    float horizon = smoothstep(-0.22, 0.38, direction.y + 0.12);
+    float aurora = smoothstep(0.52, 0.92, field + direction.y * 0.34 + uMid * 0.22);
+    float halo = smoothstep(0.54, 0.0, length(vec2(direction.x * 0.9 + 0.15, direction.y - 0.18)));
+    float crown = smoothstep(0.34, 0.82, ribbonField + uTreble * 0.18 + direction.y * 0.14);
+    float starCell = hash(floor(sphereUv * vec2(168.0, 92.0)) + floor(time * 6.0));
+    float stars = smoothstep(0.998 - uIntensity * 0.004, 1.0, starCell) * (0.03 + (1.0 - horizon) * 0.08);
 
-    vec3 glow = mix(uPrimary, uSecondary, clamp(uv.x * 0.45 + uTreble * 0.5 + field * 0.1, 0.0, 1.0));
+    vec3 color = mix(uDeep * 0.76, mix(uDeep, uPrimary, 0.2), horizon);
+    color += aurora * mix(uPrimary, uSecondary, clamp(sphereUv.x + field * 0.16, 0.0, 1.0)) * (0.12 + uIntensity * 0.18);
+    color += halo * mix(uPrimary, vec3(1.0), 0.18) * (0.08 + uBass * 0.18);
+    color += crown * mix(uSecondary, uPrimary, 0.36) * (0.04 + uTreble * 0.12);
+    color += stars * mix(uSecondary, vec3(1.0), 0.3) * 0.24;
+    color += field * mix(uPrimary, uSecondary, 0.4) * 0.04;
+    color = mix(color, uSecondary * 1.02, uCrash * 0.1);
 
-    vec3 color = uDeep;
-    color += ribbon * glow * (0.35 + uMid * 1.25);
-    color += bloomBand * mix(uPrimary, uDeep, 0.72);
-    color += field * 0.04;
-    color = mix(color, uSecondary, uCrash * 0.16);
-
-    gl_FragColor = vec4(color, 0.96);
+    gl_FragColor = vec4(color, 1.0);
   }
 `;
 
@@ -237,6 +260,30 @@ const SECTION_PALETTES: Record<LevelSectionTheme, ThemePalette> = {
     light: "#ff91e3",
   },
 };
+
+function createGlowSpriteTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 96;
+  canvas.height = 96;
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return null;
+  }
+
+  const gradient = context.createRadialGradient(48, 48, 4, 48, 48, 48);
+  gradient.addColorStop(0, "rgba(255,255,255,1)");
+  gradient.addColorStop(0.25, "rgba(255,255,255,0.92)");
+  gradient.addColorStop(0.55, "rgba(255,255,255,0.34)");
+  gradient.addColorStop(1, "rgba(255,255,255,0)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 96, 96);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  return texture;
+}
 
 type SnapshotRef = MutableRefObject<GameSnapshot>;
 
@@ -688,6 +735,8 @@ function Backdrop({
   level: LevelData | null;
   snapshotRef: SnapshotRef;
 }) {
+  const { camera } = useThree();
+  const domeRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
   const deepColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.deep));
   const primaryColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.primary));
@@ -706,6 +755,11 @@ function Backdrop({
       return;
     }
 
+    if (domeRef.current) {
+      domeRef.current.position.copy(camera.position);
+      domeRef.current.rotation.y = state.clock.elapsedTime * 0.01;
+    }
+
     targetDeepColorRef.current.set(palette.deep);
     targetPrimaryColorRef.current.set(palette.primary);
     targetSecondaryColorRef.current.set(palette.secondary);
@@ -717,26 +771,28 @@ function Backdrop({
     materialRef.current.uniforms.uMid.value = snapshot.audio.mid;
     materialRef.current.uniforms.uTreble.value = snapshot.audio.treble;
     materialRef.current.uniforms.uCrash.value = snapshot.crashFlash;
+    materialRef.current.uniforms.uIntensity.value = activeSection?.intensity ?? 0.5;
     materialRef.current.uniforms.uDeep.value.copy(deepColorRef.current);
     materialRef.current.uniforms.uPrimary.value.copy(primaryColorRef.current);
     materialRef.current.uniforms.uSecondary.value.copy(secondaryColorRef.current);
   });
 
   return (
-    <mesh position={[22, 14, -36]} rotation={[0.08, -0.3, 0]}>
-      <planeGeometry args={[130, 72]} />
+    <mesh ref={domeRef} position={[0, 0, 0]} scale={[1, 1, 1]}>
+      <sphereGeometry args={[132, 48, 48]} />
       <shaderMaterial
         ref={materialRef}
-        blending={THREE.AdditiveBlending}
         depthWrite={false}
         fragmentShader={BACKDROP_FRAGMENT_SHADER}
-        transparent
+        side={THREE.BackSide}
+        toneMapped={false}
         uniforms={{
           uTime: { value: 0 },
           uBass: { value: 0 },
           uMid: { value: 0 },
           uTreble: { value: 0 },
           uCrash: { value: 0 },
+          uIntensity: { value: 0.5 },
           uDeep: { value: new THREE.Color(SECTION_PALETTES.pulse.deep) },
           uPrimary: { value: new THREE.Color(SECTION_PALETTES.pulse.primary) },
           uSecondary: { value: new THREE.Color(SECTION_PALETTES.pulse.secondary) },
@@ -757,17 +813,22 @@ function ParticleField({
   const pointsRef = useRef<THREE.Points>(null);
   const materialRef = useRef<THREE.PointsMaterial>(null);
   const positionsRef = useRef<Float32Array | null>(null);
+  const spriteTextureRef = useRef<THREE.CanvasTexture | null>(null);
   const targetColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.primary));
 
+  if (!spriteTextureRef.current) {
+    spriteTextureRef.current = createGlowSpriteTexture();
+  }
+
   if (!positionsRef.current) {
-    const pointCount = 360;
+    const pointCount = 180;
     const positions = new Float32Array(pointCount * 3);
 
     for (let index = 0; index < pointCount; index += 1) {
       const stride = index * 3;
-      positions[stride] = (Math.random() - 0.2) * 180;
-      positions[stride + 1] = Math.random() * 40;
-      positions[stride + 2] = -Math.random() * 34 - 2;
+      positions[stride] = (Math.random() - 0.18) * 180;
+      positions[stride + 1] = Math.random() * 28 + 2;
+      positions[stride + 2] = -Math.random() * 72 - 18;
     }
 
     positionsRef.current = positions;
@@ -782,9 +843,9 @@ function ParticleField({
       return;
     }
 
-    pointsRef.current.rotation.y += delta * 0.015;
-    pointsRef.current.position.x = PLAYER_TRACK_X - snapshot.time * RUN_SPEED * 0.08;
-    pointsRef.current.position.y = 4 + Math.sin(state.clock.elapsedTime * 0.3) * 0.4;
+    pointsRef.current.rotation.y += delta * 0.006;
+    pointsRef.current.position.x = PLAYER_TRACK_X - snapshot.time * RUN_SPEED * 0.03;
+    pointsRef.current.position.y = 8.8 + Math.sin(state.clock.elapsedTime * 0.22) * 0.24;
 
     if (!materialRef.current) {
       return;
@@ -792,12 +853,12 @@ function ParticleField({
 
     targetColorRef.current.set(palette.primary);
     materialRef.current.color.lerp(targetColorRef.current, 1 - Math.exp(-delta * 4));
-    materialRef.current.opacity = 0.44 + (activeSection?.intensity ?? 0.4) * 0.16;
-    materialRef.current.size = 0.12 + snapshot.audio.overall * 0.08;
+    materialRef.current.opacity = 0.08 + (activeSection?.intensity ?? 0.4) * 0.05;
+    materialRef.current.size = 0.26 + snapshot.audio.overall * 0.04;
   });
 
   return (
-    <points ref={pointsRef} position={[0, 5, -14]}>
+    <points ref={pointsRef} position={[0, 8.8, -24]}>
       <bufferGeometry>
         <bufferAttribute
           args={[positionsRef.current, 3]}
@@ -810,10 +871,12 @@ function ParticleField({
         ref={materialRef}
         blending={THREE.AdditiveBlending}
         color="#8ffcff"
+        map={spriteTextureRef.current ?? undefined}
         depthWrite={false}
-        opacity={0.54}
-        size={0.14}
+        opacity={0.12}
+        size={0.24}
         sizeAttenuation
+        alphaTest={0.02}
         transparent
       />
     </points>
@@ -910,7 +973,7 @@ function Orb({ snapshotRef }: { snapshotRef: SnapshotRef }) {
       />
 
       <mesh ref={ringRef}>
-        <torusGeometry args={[PLAYER_RADIUS * 0.86, PLAYER_RADIUS * 0.08, 12, 24]} />
+        <torusGeometry args={[PLAYER_VISUAL_RADIUS * 0.86, PLAYER_VISUAL_RADIUS * 0.08, 12, 24]} />
         <meshBasicMaterial
           ref={haloMaterialRef}
           blending={THREE.AdditiveBlending}
@@ -937,7 +1000,7 @@ function Orb({ snapshotRef }: { snapshotRef: SnapshotRef }) {
             trailRefs.current[index] = node;
           }}
         >
-          <sphereGeometry args={[PLAYER_RADIUS, 16, 16]} />
+          <sphereGeometry args={[PLAYER_VISUAL_RADIUS, 16, 16]} />
           <meshBasicMaterial
             blending={THREE.AdditiveBlending}
             color="#58ffe7"
@@ -949,7 +1012,7 @@ function Orb({ snapshotRef }: { snapshotRef: SnapshotRef }) {
 
       <group ref={coreRef}>
         <mesh>
-          <sphereGeometry args={[PLAYER_RADIUS, 28, 28]} />
+          <sphereGeometry args={[PLAYER_VISUAL_RADIUS, 28, 28]} />
           <meshStandardMaterial
             ref={coreMaterialRef}
             color="#edffff"
@@ -960,7 +1023,7 @@ function Orb({ snapshotRef }: { snapshotRef: SnapshotRef }) {
           />
         </mesh>
         <mesh ref={glowRef} scale={[1.9, 1.9, 1.9]}>
-          <sphereGeometry args={[PLAYER_RADIUS, 16, 16]} />
+          <sphereGeometry args={[PLAYER_VISUAL_RADIUS, 16, 16]} />
           <meshBasicMaterial
             blending={THREE.AdditiveBlending}
             color="#3cf5ff"
@@ -971,7 +1034,7 @@ function Orb({ snapshotRef }: { snapshotRef: SnapshotRef }) {
       </group>
 
       <mesh ref={crashRef} scale={[1, 1, 1]} visible={false}>
-        <sphereGeometry args={[PLAYER_RADIUS, 16, 16]} />
+        <sphereGeometry args={[PLAYER_VISUAL_RADIUS, 16, 16]} />
         <meshBasicMaterial
           ref={crashMaterialRef}
           blending={THREE.AdditiveBlending}
@@ -990,15 +1053,70 @@ function LavaPool({ zone }: { zone: LavaZone }) {
   const centerX = (zone.startTime + zone.endTime) * RUN_SPEED * 0.5;
   const lavaGlowColor = `hsl(${zone.hue} 96% 58%)`;
   const lavaLightColor = `hsl(${zone.hue + 18} 100% 66%)`;
+  const voidGlowColor = `hsl(${zone.hue} 92% 72%)`;
+  const voidAccentColor = `hsl(${zone.hue + 28} 94% 76%)`;
+  const voidOffsets = createSectionOffsets(length, 14);
 
   useFrame((state) => {
-    if (!materialRef.current) {
+    if (zone.surface !== "lava" || !materialRef.current) {
       return;
     }
 
     materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
     materialRef.current.uniforms.uIntensity.value = zone.intensity;
   });
+
+  if (zone.surface === "void") {
+    return (
+      <group position={[centerX, 0, 0]}>
+        <pointLight
+          color={voidGlowColor}
+          distance={22 + length * 0.24}
+          intensity={0.7 + zone.intensity * 1.6}
+          position={[0, 0.24, 0]}
+        />
+        <mesh position={[0, -0.04, 0]}>
+          <boxGeometry args={[length, 0.08, 8.6]} />
+          <meshStandardMaterial color="#03050d" emissive="#090f28" emissiveIntensity={0.22} roughness={1} />
+        </mesh>
+        <mesh position={[0, -0.12, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[length, 7.9]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color="#081226"
+            opacity={0.48 + zone.intensity * 0.12}
+            transparent
+          />
+        </mesh>
+        {voidOffsets.map((offset, index) => (
+          <mesh
+            key={`${offset}-${index}`}
+            position={[offset, -0.08, 0]}
+            rotation={[-Math.PI / 2, 0, index % 2 === 0 ? 0 : Math.PI / 2]}
+          >
+            <torusGeometry args={[0.92 + zone.intensity * 0.44 + (index % 3) * 0.18, 0.045, 10, 26]} />
+            <meshBasicMaterial
+              blending={THREE.AdditiveBlending}
+              color={index % 2 === 0 ? voidGlowColor : voidAccentColor}
+              opacity={0.16 + zone.intensity * 0.08}
+              transparent
+            />
+          </mesh>
+        ))}
+        {[-3.88, 3.88].map((edge) => (
+          <mesh key={edge} position={[0, 0.03, edge]}>
+            <boxGeometry args={[length, 0.08, 0.16]} />
+            <meshBasicMaterial
+              blending={THREE.AdditiveBlending}
+              color={voidAccentColor}
+              opacity={0.24 + zone.intensity * 0.14}
+              transparent
+            />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
 
   return (
     <group position={[centerX, 0, 0]}>
@@ -1093,20 +1211,74 @@ function BeatRing({
 
 function Hazard({ obstacle }: { obstacle: Obstacle }) {
   if (obstacle.kind === "block") {
+    const isCeilingBeam = obstacle.baseY > 2.4 && obstacle.height <= 0.82;
+    const isMonolith = obstacle.baseY < 0.18 && obstacle.height > 2.6 && obstacle.width <= 2.2;
+    const isWideSlab = obstacle.width >= 4.8 && obstacle.height <= 0.56;
+    const cableHeight = Math.max(1.3, obstacle.baseY - 0.8);
+
+    if (isCeilingBeam) {
+      return (
+        <group position={[obstacle.time * RUN_SPEED, obstacle.baseY + obstacle.height / 2, 0]}>
+          <mesh>
+            <boxGeometry args={[obstacle.width, obstacle.height, 3.24]} />
+            <meshStandardMaterial
+              color={`hsl(${obstacle.hue} 56% 24%)`}
+              emissive={`hsl(${obstacle.hue} 92% 56%)`}
+              emissiveIntensity={0.3 + obstacle.glow * 0.36}
+              metalness={0.34}
+              roughness={0.42}
+            />
+          </mesh>
+          <mesh position={[0, obstacle.height / 2 + 0.05, 0]}>
+            <boxGeometry args={[obstacle.width * 0.88, 0.08, 2.7]} />
+            <meshBasicMaterial
+              blending={THREE.AdditiveBlending}
+              color="#dffcff"
+              opacity={0.16 + obstacle.glow * 0.1}
+              transparent
+            />
+          </mesh>
+          {[-1, 1].map((sign) => (
+            <group key={sign} position={[sign * (obstacle.width * 0.38), -obstacle.height / 2, sign * 0.72]}>
+              <mesh position={[0, -cableHeight * 0.5, 0]}>
+                <boxGeometry args={[0.08, cableHeight, 0.08]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={`hsl(${obstacle.hue} 88% 74%)`}
+                  opacity={0.08}
+                  transparent
+                />
+              </mesh>
+              <mesh position={[0, 0.04, 0]}>
+                <octahedronGeometry args={[0.18, 0]} />
+                <meshStandardMaterial
+                  color={`hsl(${obstacle.hue + 18} 90% 72%)`}
+                  emissive={`hsl(${obstacle.hue + 18} 100% 74%)`}
+                  emissiveIntensity={0.48}
+                  metalness={0.12}
+                  roughness={0.24}
+                />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      );
+    }
+
     return (
       <group position={[obstacle.time * RUN_SPEED, obstacle.baseY + obstacle.height / 2, 0]}>
         <mesh>
-          <boxGeometry args={[obstacle.width, obstacle.height, 2.8]} />
+          <boxGeometry args={[obstacle.width, obstacle.height, isWideSlab ? 3.2 : isMonolith ? 3.4 : 2.8]} />
           <meshStandardMaterial
             color={`hsl(${obstacle.hue} 78% 64%)`}
             emissive={`hsl(${obstacle.hue} 95% 55%)`}
-            emissiveIntensity={0.82 + obstacle.glow * 1.2}
-            metalness={0.12}
-            roughness={0.22}
+            emissiveIntensity={isMonolith ? 0.66 + obstacle.glow * 0.72 : 0.82 + obstacle.glow * 1.2}
+            metalness={isMonolith ? 0.18 : 0.12}
+            roughness={isMonolith ? 0.34 : 0.22}
           />
         </mesh>
         <mesh position={[0, obstacle.height / 2 + 0.05, 0]}>
-          <boxGeometry args={[obstacle.width * 0.92, 0.08, 2.3]} />
+          <boxGeometry args={[obstacle.width * 0.92, 0.08, isWideSlab ? 2.7 : 2.3]} />
           <meshBasicMaterial
             blending={THREE.AdditiveBlending}
             color="#d8ffff"
@@ -1114,6 +1286,17 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
             transparent
           />
         </mesh>
+        {isMonolith ? (
+          <mesh position={[0, 0, 0]}>
+            <boxGeometry args={[obstacle.width * 0.72, obstacle.height * 0.9, 3.56]} />
+            <meshBasicMaterial
+              blending={THREE.AdditiveBlending}
+              color={`hsl(${obstacle.hue} 88% 76%)`}
+              opacity={0.08 + obstacle.glow * 0.05}
+              transparent
+            />
+          </mesh>
+        ) : null}
         {obstacle.baseY > 0.16 ? (
           <mesh position={[0, -obstacle.height / 2 - obstacle.baseY / 2, 0]}>
             <boxGeometry args={[obstacle.width * 0.14, obstacle.baseY, 0.16]} />
@@ -1131,6 +1314,8 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
 
   const spikes = Array.from({ length: obstacle.spikes });
   const spikeWidth = obstacle.width / obstacle.spikes;
+  const isShardField = obstacle.spikes >= 3 || obstacle.width > 3;
+  const isElevatedHazard = obstacle.baseY > 0.42;
 
   return (
     <group position={[obstacle.time * RUN_SPEED, obstacle.baseY + 0.02, 0]}>
@@ -1150,8 +1335,20 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
         const radius = Math.max(0.28, spikeWidth * 0.34);
 
         return (
-          <mesh key={index} position={[x, height / 2, 0]}>
-            <coneGeometry args={[radius, height, 4]} />
+          <mesh
+            key={index}
+            position={[x, height / 2, 0]}
+            scale={
+              isShardField || isElevatedHazard
+                ? [0.78, Math.max(1.1, height / Math.max(radius * 2, 0.01)), 0.78]
+                : [1, 1, 1]
+            }
+          >
+            {isShardField || isElevatedHazard ? (
+              <octahedronGeometry args={[radius * 0.96, 0]} />
+            ) : (
+              <coneGeometry args={[radius, height, 4]} />
+            )}
             <meshStandardMaterial
               color={`hsl(${obstacle.hue} 92% 60%)`}
               emissive={`hsl(${obstacle.hue} 100% 52%)`}
@@ -1179,6 +1376,14 @@ function getSectionSpacing(kind: LevelSectionKind) {
     return 18;
   }
 
+  if (kind === "space") {
+    return 20;
+  }
+
+  if (kind === "descent") {
+    return 13;
+  }
+
   return 14;
 }
 
@@ -1189,26 +1394,267 @@ function SectionScenery({ section }: { section: LevelSection }) {
   const length = Math.max(12, endX - startX);
   const centerX = (startX + endX) * 0.5;
   const offsets = createSectionOffsets(length, getSectionSpacing(section.kind));
-  const hazeOpacity = 0.04 + section.intensity * 0.04;
-  const accentOpacity = 0.12 + section.intensity * 0.14;
+  const farOffsets = createSectionOffsets(length, Math.max(20, getSectionSpacing(section.kind) * 1.55));
+  const landmarkOffsets = createSectionOffsets(length, Math.max(18, getSectionSpacing(section.kind) * 1.3));
+  const edgeOffsets = createSectionOffsets(length, Math.max(26, getSectionSpacing(section.kind) * 2.2));
+  const hazeOpacity = 0.018 + section.intensity * 0.024;
+  const accentOpacity = 0.08 + section.intensity * 0.1;
+  const planetSide = section.variant === 1 ? 1 : -1;
+  const primaryPlanetRadius = 4.8 + section.intensity * 1.5 + section.variant * 0.32;
+  const hasPrimaryPlanet =
+    section.kind === "space" ||
+    section.theme === "void" ||
+    section.theme === "sky" ||
+    section.theme === "solar";
+  const hasPlanetRing = section.kind === "space" || section.theme === "void" || section.theme === "sky";
+  const warmHorizon = section.theme === "solar" || section.theme === "forge";
+  const horizonGlowOpacity = warmHorizon ? 0.16 + section.intensity * 0.08 : 0.07 + section.intensity * 0.04;
 
   return (
     <group position={[centerX, 0, 0]}>
       <pointLight
         color={palette.light}
         distance={30 + length * 0.2}
-        intensity={0.42 + section.intensity * 0.9}
+        intensity={0.34 + section.intensity * 0.62}
         position={[0, 5.6 + section.variant * 0.5, -6]}
       />
-      <mesh position={[0, 9 + section.variant * 0.8, -28]} rotation={[0.05, 0, 0]}>
-        <planeGeometry args={[Math.max(34, length * 0.68), 18]} />
-        <meshBasicMaterial
-          blending={THREE.AdditiveBlending}
-          color={palette.primary}
-          opacity={hazeOpacity}
-          transparent
-        />
-      </mesh>
+      <group position={[0, 9.2 + section.variant * 0.6, -30 - section.variant * 1.4]}>
+        {[-1, 0, 1].map((spread, index) => (
+          <mesh
+            key={`haze-${spread}`}
+            position={[spread * (8.2 + index * 1.4), (index % 2) * 0.6, -index * 1.2]}
+            scale={[10.4 - index * 1.1, 2.9 + index * 0.35, 3.8]}
+          >
+            <sphereGeometry args={[1, 18, 18]} />
+            <meshBasicMaterial
+              blending={THREE.AdditiveBlending}
+              color={index === 1 ? palette.primary : palette.secondary}
+              depthWrite={false}
+              opacity={hazeOpacity * (index === 1 ? 1.2 : 0.78)}
+              transparent
+            />
+          </mesh>
+        ))}
+      </group>
+
+      <group position={[planetSide * Math.min(length * 0.18, 16), 10.6 + section.variant * 0.9, -58]}>
+        {hasPrimaryPlanet ? (
+          <group>
+            <mesh>
+              <sphereGeometry args={[primaryPlanetRadius, 28, 28]} />
+              <meshStandardMaterial
+                color={warmHorizon ? palette.secondary : palette.primary}
+                emissive={warmHorizon ? palette.secondary : palette.primary}
+                emissiveIntensity={0.12 + section.intensity * 0.05}
+                metalness={0.04}
+                roughness={0.88}
+              />
+            </mesh>
+            <mesh scale={[1.08, 1.08, 1.08]}>
+              <sphereGeometry args={[primaryPlanetRadius, 22, 22]} />
+              <meshBasicMaterial
+                blending={THREE.AdditiveBlending}
+                color={warmHorizon ? palette.markerAccent : palette.secondary}
+                depthWrite={false}
+                opacity={0.08 + section.intensity * 0.04}
+                transparent
+              />
+            </mesh>
+            {hasPlanetRing ? (
+              <>
+                <mesh rotation={[0.58, 0.18, 0.36 + section.variant * 0.08]}>
+                  <torusGeometry args={[primaryPlanetRadius * 1.52, primaryPlanetRadius * 0.075, 14, 72]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={palette.markerAccent}
+                    depthWrite={false}
+                    opacity={0.16 + section.intensity * 0.06}
+                    transparent
+                  />
+                </mesh>
+                <mesh rotation={[0.58, 0.18, 0.36 + section.variant * 0.08]} scale={[1.08, 1.08, 0.92]}>
+                  <torusGeometry args={[primaryPlanetRadius * 1.7, primaryPlanetRadius * 0.032, 12, 72]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={palette.secondary}
+                    depthWrite={false}
+                    opacity={0.08 + section.intensity * 0.03}
+                    transparent
+                  />
+                </mesh>
+              </>
+            ) : null}
+          </group>
+        ) : null}
+
+        <mesh position={[-planetSide * (primaryPlanetRadius * 2.6 + 1.2), 4.8 + section.variant * 0.3, 8]}>
+          <sphereGeometry args={[1.4 + section.intensity * 0.5, 20, 20]} />
+          <meshStandardMaterial
+            color={palette.pylonAccent}
+            emissive={palette.pylonAccent}
+            emissiveIntensity={0.08}
+            metalness={0.02}
+            roughness={0.94}
+          />
+        </mesh>
+
+        <mesh position={[-planetSide * (primaryPlanetRadius * 2.6 + 1.2), 4.8 + section.variant * 0.3, 8]} scale={[1.16, 1.16, 1.16]}>
+          <sphereGeometry args={[1.4 + section.intensity * 0.5, 16, 16]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={palette.secondary}
+            depthWrite={false}
+            opacity={0.06}
+            transparent
+          />
+        </mesh>
+      </group>
+
+      <group position={[0, 5.6 + section.variant * 0.4, -52]}>
+        <mesh scale={[16, 4.6, 2.2]}>
+          <sphereGeometry args={[1, 20, 20]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={warmHorizon ? palette.markerAccent : palette.primary}
+            depthWrite={false}
+            opacity={horizonGlowOpacity}
+            transparent
+          />
+        </mesh>
+      </group>
+
+      <group position={[0, -2.2 - section.variant * 0.24, -36]}>
+        {farOffsets.map((offset, index) => (
+          <group key={`landmass-${offset}`} position={[offset * 0.72, 0, index % 2 === 0 ? -2.2 : 1.4]}>
+            <mesh
+              position={[0, 4.6 + (index % 3) * 0.68, 0]}
+              rotation={[0.02, index * 0.18, index % 2 === 0 ? 0.08 : -0.06]}
+              scale={[8.2 - (index % 3) * 0.55, 5.2 + (index % 2) * 0.55, 2.3]}
+            >
+              <coneGeometry args={[1, 1, 7]} />
+              <meshStandardMaterial
+                color={index % 2 === 0 ? palette.deep : palette.trackBase}
+                emissive={palette.primary}
+                emissiveIntensity={0.025 + section.intensity * 0.02}
+                metalness={0.04}
+                roughness={0.96}
+              />
+            </mesh>
+            <mesh
+              position={[0, 4.8 + (index % 3) * 0.68, 0]}
+              rotation={[0.02, index * 0.18, index % 2 === 0 ? 0.08 : -0.06]}
+              scale={[8.8 - (index % 3) * 0.55, 5.4 + (index % 2) * 0.55, 2.9]}
+            >
+              <coneGeometry args={[1, 1, 7]} />
+              <meshBasicMaterial
+                blending={THREE.AdditiveBlending}
+                color={index % 2 === 0 ? palette.secondary : palette.primary}
+                depthWrite={false}
+                opacity={0.035 + section.intensity * 0.018}
+                transparent
+              />
+            </mesh>
+          </group>
+        ))}
+      </group>
+
+      <group position={[0, -1.2 + section.variant * 0.1, -24]}>
+        {landmarkOffsets.map((offset, index) => (
+          <group key={`landmark-${offset}`} position={[offset, 0, index % 2 === 0 ? -0.8 : 1]}>
+            <mesh
+              position={[0, 3.1 + (index % 2) * 0.55, 0]}
+              rotation={[0.08, index * 0.24, 0.08]}
+              scale={[1.7 + (index % 2) * 0.35, 5.2 + (index % 3) * 0.95, 1.4]}
+            >
+              <cylinderGeometry args={[0.34, 0.76, 1, 6]} />
+              <meshStandardMaterial
+                color={palette.trackBase}
+                emissive={palette.primary}
+                emissiveIntensity={0.04}
+                metalness={0.12}
+                roughness={0.86}
+              />
+            </mesh>
+            {[-1, 1].map((sign) => (
+              <group
+                key={sign}
+                position={[sign * (1.7 + (index % 2) * 0.45), 1.3 + (index % 3) * 0.24, sign * 0.74]}
+              >
+                <mesh rotation={[0.04, sign * 0.28, sign * 0.06]} scale={[1.2, 3.4 + (index % 2) * 0.48, 1.1]}>
+                  <coneGeometry args={[0.42, 1, 5]} />
+                  <meshStandardMaterial
+                    color={sign > 0 ? palette.pylon : palette.deep}
+                    emissive={palette.secondary}
+                    emissiveIntensity={0.035}
+                    metalness={0.08}
+                    roughness={0.9}
+                  />
+                </mesh>
+                <mesh rotation={[0.04, sign * 0.28, sign * 0.06]} scale={[1.34, 3.8 + (index % 2) * 0.54, 1.24]}>
+                  <coneGeometry args={[0.42, 1, 5]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={sign > 0 ? palette.secondary : palette.primary}
+                    depthWrite={false}
+                    opacity={0.03 + section.intensity * 0.014}
+                    transparent
+                  />
+                </mesh>
+              </group>
+            ))}
+          </group>
+        ))}
+      </group>
+
+      <group position={[0, 0, 0]}>
+        {edgeOffsets.map((offset, index) => (
+          <group key={`flora-${offset}`} position={[offset * 0.88, 0, 0]}>
+            {[-1, 1].map((sign) => (
+              <group key={sign} position={[0, 0.64 + (index % 2) * 0.14, sign * 10.9]}>
+                <mesh
+                  rotation={[0.18, index * 0.22, sign * 0.1]}
+                  scale={[0.84, 3.6 + (index % 3) * 0.42, 0.84]}
+                >
+                  <coneGeometry args={[0.46 + section.intensity * 0.08, 1, 5]} />
+                  <meshStandardMaterial
+                    color={sign > 0 ? palette.trackBase : palette.deep}
+                    emissive={sign > 0 ? palette.secondary : palette.primary}
+                    emissiveIntensity={0.03 + section.intensity * 0.02}
+                    metalness={0.04}
+                    roughness={0.94}
+                  />
+                </mesh>
+                <mesh
+                  rotation={[0.18, index * 0.22, sign * 0.1]}
+                  scale={[1, 4.2 + (index % 3) * 0.52, 1]}
+                >
+                  <coneGeometry args={[0.46 + section.intensity * 0.08, 1, 5]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={sign > 0 ? palette.secondary : palette.primary}
+                    depthWrite={false}
+                    transparent
+                    opacity={0.028 + section.intensity * 0.016}
+                  />
+                </mesh>
+              </group>
+            ))}
+          </group>
+        ))}
+      </group>
+
+      <group position={[0, 8.6 + section.variant * 0.8, -24 - section.variant * 1.2]}>
+        <mesh rotation={[0.24, section.variant * 0.3, 0.08]}>
+          <torusGeometry args={[5.8 + section.intensity * 1.2, 0.1, 12, 42]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={palette.secondary}
+            depthWrite={false}
+            opacity={0.04 + section.intensity * 0.03}
+            transparent
+          />
+        </mesh>
+      </group>
 
       {section.kind === "ground"
         ? offsets.map((offset, index) => (
@@ -1422,6 +1868,89 @@ function SectionScenery({ section }: { section: LevelSection }) {
             </group>
           ))
         : null}
+
+      {section.kind === "space"
+        ? offsets.map((offset, index) => (
+            <group key={`${section.startTime}-space-${offset}`} position={[offset, 0, 0]}>
+              <mesh position={[0, 8.8 + (index % 2) * 1.2, -8.4 - (index % 3) * 0.8]} rotation={[0.24, index * 0.36, 0.18]}>
+                <torusGeometry args={[2.1 + section.intensity * 0.6, 0.12, 14, 40]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={index % 2 === 0 ? palette.secondary : palette.primary}
+                  opacity={0.14 + section.intensity * 0.08}
+                  transparent
+                />
+              </mesh>
+              {[-1, 1].map((sign) => (
+                <group key={sign} position={[0, 6.4 + (index % 3) * 0.7, sign * 7.2]}>
+                  <mesh rotation={[0.4, sign * 0.5, index * 0.22]}>
+                    <octahedronGeometry args={[0.86 + section.intensity * 0.34, 0]} />
+                    <meshStandardMaterial
+                      color={sign > 0 ? palette.primary : palette.secondary}
+                      emissive={sign > 0 ? palette.primary : palette.secondary}
+                      emissiveIntensity={1.15}
+                      metalness={0.12}
+                      roughness={0.2}
+                    />
+                  </mesh>
+                  <mesh position={[0, -3.5, 0]}>
+                    <boxGeometry args={[0.08, 5.8, 0.08]} />
+                    <meshBasicMaterial
+                      blending={THREE.AdditiveBlending}
+                      color={palette.rail}
+                      opacity={0.18}
+                      transparent
+                    />
+                  </mesh>
+                </group>
+              ))}
+            </group>
+          ))
+        : null}
+
+      {section.kind === "descent"
+        ? offsets.map((offset, index) => (
+            <group key={`${section.startTime}-descent-${offset}`} position={[offset, 0, 0]}>
+              {[-1, 1].map((sign) => (
+                <mesh
+                  key={sign}
+                  position={[0, 5.1 - (index % 3) * 0.5, sign * 6.8]}
+                  rotation={[0.18, sign * 0.18, sign * 0.36]}
+                >
+                  <boxGeometry args={[0.44, 6.2 + (index % 2) * 1.1, 1.24]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={sign > 0 ? palette.pylonAccent : palette.primary}
+                    opacity={0.14 + section.intensity * 0.08}
+                    transparent
+                  />
+                </mesh>
+              ))}
+              <group position={[0, 7.4, -10.2]}>
+                <mesh scale={[3.4, 1.6, 1.8]}>
+                  <sphereGeometry args={[1, 18, 18]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={palette.secondary}
+                    depthWrite={false}
+                    opacity={0.09 + section.intensity * 0.05}
+                    transparent
+                  />
+                </mesh>
+                <mesh rotation={[0.14, 0, 0.24]}>
+                  <torusGeometry args={[2.5 + section.intensity * 0.42, 0.09, 10, 28]} />
+                  <meshBasicMaterial
+                    blending={THREE.AdditiveBlending}
+                    color={palette.primary}
+                    depthWrite={false}
+                    opacity={0.08 + section.intensity * 0.05}
+                    transparent
+                  />
+                </mesh>
+              </group>
+            </group>
+          ))
+        : null}
     </group>
   );
 }
@@ -1629,7 +2158,7 @@ function SceneContent({
       <ParticleField level={level} snapshotRef={snapshotRef} />
       <Track level={level} snapshot={snapshot} snapshotRef={snapshotRef} />
       <Orb snapshotRef={snapshotRef} />
-      <mesh position={[PLAYER_TRACK_X, GROUND_Y - PLAYER_RADIUS - 0.72, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh position={[PLAYER_TRACK_X, GROUND_Y - PLAYER_VISUAL_RADIUS - 0.72, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[3.8, 32]} />
         <meshBasicMaterial
           blending={THREE.AdditiveBlending}

@@ -36,6 +36,97 @@ const TRACK_OPTIONS = [
   { id: "found-da", label: "Found da", url: foundDaUrl },
 ] satisfies Array<{ id: TrackId; label: string; url: string }>;
 
+const HERO_TAUNTS = {
+  fresh: [
+    "Your mate says you've no chance of getting 100%.",
+    "Apparently this looked easier in your head.",
+    "Confidence is doing a lot of heavy lifting here.",
+    "Plenty of track. Shame about the driving.",
+    "You only need perfect timing. Minor detail.",
+  ],
+  warmed: [
+    "At this point the opening section knows you personally.",
+    "You've really committed to not clearing this bit.",
+    "The track believes in you less with every restart.",
+    "Strong effort, if the goal was 12%.",
+    "Even the cones have stopped respecting you.",
+  ],
+  tilted: [
+    "Your mate has started asking if this is the tutorial.",
+    "The first half still remains a rumor.",
+    "Brave to keep queueing up the same mistake.",
+    "You've turned failure into a daily ritual.",
+    "This is less speedrun, more public struggle.",
+  ],
+  cooked: [
+    "The level is now recycling insults to save time.",
+    "You've died enough times to qualify as local scenery.",
+    "At this point 100% is basically performance art.",
+    "The orb is trying its best despite the management.",
+    "The track has filed a quiet complaint.",
+  ],
+} as const;
+
+const HINT_TAUNTS = {
+  fresh: [
+    "Just give up.",
+    "Go on, miss the easy one.",
+    "Perfect timing would be a nice change.",
+    "Try not to embarrass the orb.",
+    "That jump is not getting any kinder.",
+  ],
+  warmed: [
+    "Still chasing 100%? Charming.",
+    "The beat is consistent. The driver isn't.",
+    "One clean run would really ruin the pattern.",
+    "Your Da Sells Avon.",
+    "You've nearly mastered crashing in new places.",
+    "Maybe this attempt will include landing.",
+  ],
+  tilted: [
+    "You know the jump is coming. Fascinating that it still works.",
+    "The track is practically sending you a calendar invite.",
+    "All this practice and still no agreement with the beat.",
+    "Another restart? The level was hoping you'd say that.",
+    "If stubbornness scored points you'd be done already.",
+  ],
+  cooked: [
+    "The orb wants a transfer.",
+    "This would be a great run if failure was the objective.",
+    "You're not learning, you're rehearsing.",
+    "Even the exit button thinks this is getting bleak.",
+    "No rush. 100% is only several bad decisions away.",
+  ],
+} as const;
+
+type TauntTier = keyof typeof HERO_TAUNTS;
+
+function getTauntTier(deaths: number): TauntTier {
+  if (deaths >= 14) {
+    return "cooked";
+  }
+
+  if (deaths >= 7) {
+    return "tilted";
+  }
+
+  if (deaths >= 3) {
+    return "warmed";
+  }
+
+  return "fresh";
+}
+
+function pickTaunt(pool: readonly string[], seed: number, step: number) {
+  if (pool.length === 0) {
+    return "";
+  }
+
+  const index = Math.abs(seed + step * 7) % pool.length;
+
+  return pool[index] ?? "";
+}
+
 export default function App() {
   const [selectedTrackId, setSelectedTrackId] = useState<TrackId>(TRACK_OPTIONS[0].id);
   const activeTrack = TRACK_OPTIONS.find((track) => track.id === selectedTrackId) ?? TRACK_OPTIONS[0];
@@ -44,11 +135,23 @@ export default function App() {
     activeTrack.id,
   );
   const stageRef = useRef<HTMLElement | null>(null);
+  const tauntSeedRef = useRef(Math.floor(Math.random() * 10_000));
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
   const deferredProgress = useDeferredValue(snapshot.progress);
   const waveformBars = level?.waveform ?? [];
   const activeBar = Math.floor(deferredProgress * waveformBars.length);
+  const tauntTier = getTauntTier(snapshot.deaths);
+  const heroTaunt = pickTaunt(
+    HERO_TAUNTS[tauntTier],
+    tauntSeedRef.current + (activeTrack.id === "found-da" ? 19 : 7),
+    snapshot.deaths + Math.round(snapshot.bestProgress * 12),
+  );
+  const hintTaunt = pickTaunt(
+    HINT_TAUNTS[tauntTier],
+    tauntSeedRef.current + 13,
+    snapshot.deaths * 2 + (snapshot.status === "crashed" ? 1 : 0),
+  );
   const statusHeading =
     snapshot.status === "loading"
       ? "Analyzing the track"
@@ -143,10 +246,7 @@ export default function App() {
           <div className="brand">
             <span className="eyebrow">Audio-locked orb runner</span>
             <h1>The Orb</h1>
-            <p>
-              A neon orb runner where the jumps, hazards, and camera hits stay
-              locked to the pulse.
-            </p>
+            <p>{heroTaunt}</p>
           </div>
 
           <div className="meter-row">
@@ -195,7 +295,7 @@ export default function App() {
               </div>
 
               <div className="overlay-footer">
-                <div className="hint-chip">Jump anytime. Perfect beat hits get the clean line.</div>
+                <div className="hint-chip">{hintTaunt}</div>
                 {fullscreenSupported ? (
                   <button
                     aria-pressed={isFullscreen}

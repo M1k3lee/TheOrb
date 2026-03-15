@@ -1,5 +1,6 @@
 export const RUN_SPEED = 21.2;
-export const PLAYER_RADIUS = 0.74;
+export const PLAYER_VISUAL_RADIUS = 0.74;
+export const PLAYER_COLLISION_RADIUS = 0.68;
 export const GROUND_Y = 1.08;
 export const JUMP_VELOCITY = 21.4;
 export const GRAVITY = 66;
