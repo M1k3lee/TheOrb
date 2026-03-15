@@ -61,9 +61,9 @@ export default function App() {
     snapshot.status === "loading"
       ? "Breaking the song into pulse points so the level, camera, and effects stay locked to the music."
       : snapshot.status === "ready"
-        ? "The orb drives forward automatically now. Jump inputs only lock in on cue beats, and the later sections climb over lava."
+        ? "The orb drives forward automatically now. You can jump at any time, but the level is authored around perfect beat hits and later climbs over lava."
       : snapshot.status === "playing"
-          ? "You are always moving. Press on the cue ring, jab for a short hop, hold for a longer arc, and climb the block stacks cleanly."
+          ? "You are always moving. Jump whenever you want, but the clean line is on the cue ring. Tap short, hold longer, and climb the block stacks cleanly."
           : snapshot.status === "crashed"
             ? `You made it ${Math.round(snapshot.progress * 100)}% through the run. Restart and clean up the next section.`
             : snapshot.status === "finished"
@@ -166,7 +166,7 @@ export default function App() {
             </div>
 
             <div className="overlay-footer">
-              <div className="hint-chip">Cue lock: press on the ring, tap short, hold long</div>
+              <div className="hint-chip">Jump anytime. Perfect beat hits get the clean line.</div>
               {fullscreenSupported ? (
                 <button
                   aria-pressed={isFullscreen}

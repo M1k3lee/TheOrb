@@ -40,8 +40,13 @@ const IDLE_AUDIO: AudioFrame = {
   overall: 0.08,
 };
 
-const BEAT_EARLY_WINDOW = 0.12;
 const BEAT_LATE_WINDOW = 0.085;
+const PERFECT_BEAT_WINDOW = 0.045;
+const GOOD_BEAT_WINDOW = 0.09;
+const PERFECT_JUMP_BOOST = 1.06;
+const GOOD_JUMP_BOOST = 1.025;
+const PERFECT_HOLD_LIMIT = 0.17;
+const GOOD_HOLD_LIMIT = 0.15;
 const LAVA_SURFACE_Y = 0.22;
 
 function createRuntimeState(status: GameStatus): RuntimeState {
@@ -229,6 +234,29 @@ function advanceCueIndex(cues: BeatPoint[], time: number, currentIndex: number) 
   return nextIndex;
 }
 
+function findNearestCue(cues: BeatPoint[], time: number, currentIndex: number) {
+  const nextIndex = advanceCueIndex(cues, time, currentIndex);
+  const nextCue = cues[nextIndex] ?? null;
+  const previousCue = nextIndex > 0 ? cues[nextIndex - 1] : null;
+
+  if (!nextCue) {
+    return previousCue
+      ? { cue: previousCue, index: nextIndex - 1, delta: time - previousCue.time }
+      : null;
+  }
+
+  if (!previousCue) {
+    return { cue: nextCue, index: nextIndex, delta: nextCue.time - time };
+  }
+
+  const previousDelta = Math.abs(time - previousCue.time);
+  const nextDelta = Math.abs(nextCue.time - time);
+
+  return previousDelta <= nextDelta
+    ? { cue: previousCue, index: nextIndex - 1, delta: time - previousCue.time }
+    : { cue: nextCue, index: nextIndex, delta: nextCue.time - time };
+}
+
 export function useRhythmGame(audioUrl: string) {
   const initialRuntime = createRuntimeState("loading");
   const initialSnapshot = buildSnapshot(initialRuntime, null, IDLE_AUDIO);
@@ -246,8 +274,8 @@ export function useRhythmGame(audioUrl: string) {
   const jumpHoldTimeRef = useRef(0);
   const coyoteTimeRef = useRef(0);
   const nextCueIndexRef = useRef(0);
-  const pendingCueIndexRef = useRef<number | null>(null);
-  const pendingCueTimeRef = useRef<number | null>(null);
+  const queuedJumpBoostRef = useRef(1);
+  const queuedJumpHoldLimitRef = useRef(MAX_HOLD_JUMP_TIME);
 
   const commitSnapshot = (audio: AudioFrame, forceUi = false) => {
     const nextSnapshot = buildSnapshot(runtimeRef.current, levelRef.current, audio);
@@ -284,8 +312,8 @@ export function useRhythmGame(audioUrl: string) {
     uiSnapshotRef.current = loadingSnapshot;
     lastUiCommitRef.current = performance.now();
     nextCueIndexRef.current = 0;
-    pendingCueIndexRef.current = null;
-    pendingCueTimeRef.current = null;
+    queuedJumpBoostRef.current = 1;
+    queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
     setLevel(null);
     setError(null);
     setSnapshot(loadingSnapshot);
@@ -353,8 +381,8 @@ export function useRhythmGame(audioUrl: string) {
       jumpHoldTimeRef.current = 0;
       coyoteTimeRef.current = COYOTE_TIME;
       nextCueIndexRef.current = 0;
-      pendingCueIndexRef.current = null;
-      pendingCueTimeRef.current = null;
+      queuedJumpBoostRef.current = 1;
+      queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
       setError(null);
       commitSnapshot({
         bass: 0.12,
@@ -393,21 +421,31 @@ export function useRhythmGame(audioUrl: string) {
 
     const cueIndex = advanceCueIndex(currentLevel.beats, runtime.time, nextCueIndexRef.current);
     nextCueIndexRef.current = cueIndex;
-    const cue = currentLevel.beats[cueIndex];
+    const nearestCue = findNearestCue(currentLevel.beats, runtime.time, cueIndex);
+    const beatError = Math.abs(nearestCue?.delta ?? Number.POSITIVE_INFINITY);
 
-    if (!cue) {
-      return;
+    if (beatError <= PERFECT_BEAT_WINDOW) {
+      queuedJumpBoostRef.current = PERFECT_JUMP_BOOST;
+      queuedJumpHoldLimitRef.current = Math.max(
+        PERFECT_HOLD_LIMIT,
+        nearestCue?.cue.action === "hold" || nearestCue?.cue.action === "climb"
+          ? PERFECT_HOLD_LIMIT
+          : MAX_HOLD_JUMP_TIME,
+      );
+    } else if (beatError <= GOOD_BEAT_WINDOW) {
+      queuedJumpBoostRef.current = GOOD_JUMP_BOOST;
+      queuedJumpHoldLimitRef.current = Math.max(
+        GOOD_HOLD_LIMIT,
+        nearestCue?.cue.action === "hold" || nearestCue?.cue.action === "climb"
+          ? GOOD_HOLD_LIMIT
+          : MAX_HOLD_JUMP_TIME,
+      );
+    } else {
+      queuedJumpBoostRef.current = 1;
+      queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
     }
 
-    const timeUntilCue = cue.time - runtime.time;
-
-    if (timeUntilCue < -BEAT_LATE_WINDOW || timeUntilCue > BEAT_EARLY_WINDOW) {
-      return;
-    }
-
-    pendingCueIndexRef.current = cueIndex;
-    pendingCueTimeRef.current = cue.time;
-    jumpBufferRef.current = Math.max(JUMP_BUFFER_TIME, timeUntilCue + BEAT_LATE_WINDOW);
+    jumpBufferRef.current = JUMP_BUFFER_TIME;
   });
 
   const releaseJump = useEffectEvent(() => {
@@ -502,44 +540,20 @@ export function useRhythmGame(audioUrl: string) {
         runtime.crashFlash = Math.max(0, runtime.crashFlash - delta * 1.3);
         jumpBufferRef.current = Math.max(0, jumpBufferRef.current - delta);
         nextCueIndexRef.current = advanceCueIndex(currentLevel.beats, runtime.time, nextCueIndexRef.current);
-
-        if (
-          pendingCueIndexRef.current !== null &&
-          pendingCueIndexRef.current < nextCueIndexRef.current
-        ) {
-          pendingCueIndexRef.current = null;
-          pendingCueTimeRef.current = null;
-        }
-
         coyoteTimeRef.current = runtime.grounded
           ? COYOTE_TIME
           : Math.max(0, coyoteTimeRef.current - delta);
         const previousY = runtime.playerY;
-        const pendingCueTime = pendingCueTimeRef.current;
-        const shouldJump =
-          (runtime.grounded || coyoteTimeRef.current > 0) &&
-          jumpBufferRef.current > 0 &&
-          pendingCueTime !== null &&
-          runtime.time >= pendingCueTime - 0.006 &&
-          runtime.time <= pendingCueTime + BEAT_LATE_WINDOW;
+        const shouldJump = (runtime.grounded || coyoteTimeRef.current > 0) && jumpBufferRef.current > 0;
 
         if (shouldJump) {
           runtime.grounded = false;
-          runtime.playerVelocity = JUMP_VELOCITY;
+          runtime.playerVelocity = JUMP_VELOCITY * queuedJumpBoostRef.current;
           jumpBufferRef.current = 0;
-          jumpHoldTimeRef.current = MAX_HOLD_JUMP_TIME;
+          jumpHoldTimeRef.current = queuedJumpHoldLimitRef.current;
           coyoteTimeRef.current = 0;
-          nextCueIndexRef.current = Math.max(nextCueIndexRef.current, (pendingCueIndexRef.current ?? 0) + 1);
-          pendingCueIndexRef.current = null;
-          pendingCueTimeRef.current = null;
-        } else if (
-          pendingCueTime !== null &&
-          runtime.time > pendingCueTime + BEAT_LATE_WINDOW
-        ) {
-          jumpBufferRef.current = 0;
-          nextCueIndexRef.current = Math.max(nextCueIndexRef.current, (pendingCueIndexRef.current ?? 0) + 1);
-          pendingCueIndexRef.current = null;
-          pendingCueTimeRef.current = null;
+          queuedJumpBoostRef.current = 1;
+          queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
         }
 
         if (!runtime.grounded) {
@@ -588,14 +602,14 @@ export function useRhythmGame(audioUrl: string) {
           runtime.status = "crashed";
           runtime.crashFlash = 1;
           runtime.deaths += 1;
-          pendingCueIndexRef.current = null;
-          pendingCueTimeRef.current = null;
+          queuedJumpBoostRef.current = 1;
+          queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
           engine.stop();
         } else if (runtime.time >= currentLevel.duration - 0.08) {
           runtime.status = "finished";
           runtime.time = currentLevel.duration;
-          pendingCueIndexRef.current = null;
-          pendingCueTimeRef.current = null;
+          queuedJumpBoostRef.current = 1;
+          queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
           engine.stop();
         }
 
