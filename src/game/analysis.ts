@@ -26,6 +26,10 @@ const ENERGY_SAMPLE_COUNT = 320;
 const BAR_BEAT_COUNT = 8;
 const LAVA_SURFACE_Y = 0.22;
 const SIMULATION_STEP = 1 / 180;
+const MIN_PULSE_INTERVAL = 0.28;
+const MAX_PULSE_INTERVAL = 0.72;
+const GRID_SNAP_WINDOW_RATIO = 0.22;
+const OBSTACLE_SYNC_OFFSET_SCALE = 0.22;
 const PLAYER_COLLISION_HEIGHT = PLAYER_COLLISION_RADIUS * (0.84 + 0.72);
 const MIN_STACK_PASSAGE_HEIGHT = PLAYER_COLLISION_HEIGHT + 0.14;
 const OVERHEAD_ESCAPE_TIME = 0.11;
@@ -237,6 +241,18 @@ const SECTION_THEME_POOLS: Record<SectionType, LevelSectionTheme[]> = {
   descent: ["solar", "forge"],
 };
 
+const SECTION_DIFFICULTY: Record<SectionType, number> = {
+  ground: 1,
+  climb: 1.8,
+  bridge: 2.2,
+  drop: 2.5,
+  floating: 2.9,
+  tower: 3.5,
+  descent: 3.7,
+  gauntlet: 4.2,
+  space: 4.5,
+};
+
 function getTrackProfile(trackId: TrackId): TrackProfile {
   if (trackId === "found-da") {
     return FOUND_DA_PROFILE;
@@ -332,41 +348,142 @@ function sampleBuckets(values: ArrayLike<number>, count: number) {
   return normalize(buckets);
 }
 
+function estimateBeatIntervalFromGaps(beats: GridBeat[]) {
+  const gaps: number[] = [];
+
+  for (let index = 1; index < beats.length; index += 1) {
+    const gap = beats[index].time - beats[index - 1].time;
+
+    if (gap >= MIN_PULSE_INTERVAL && gap <= MAX_PULSE_INTERVAL) {
+      gaps.push(gap);
+    }
+
+    const halvedGap = gap * 0.5;
+
+    if (halvedGap >= MIN_PULSE_INTERVAL && halvedGap <= MAX_PULSE_INTERVAL) {
+      gaps.push(halvedGap);
+    }
+  }
+
+  return clamp(median(gaps) || 0.48, MIN_PULSE_INTERVAL, MAX_PULSE_INTERVAL);
+}
+
+function calculateLagCorrelation(values: number[], lag: number) {
+  let total = 0;
+
+  for (let index = lag; index < values.length; index += 1) {
+    total += (values[index] ?? 0) * (values[index - lag] ?? 0);
+  }
+
+  return total / Math.max(1, values.length - lag);
+}
+
+function refineLagInterval(scores: number[], lag: number, frameDuration: number) {
+  const left = scores[lag - 1] ?? scores[lag] ?? 0;
+  const center = scores[lag] ?? 0;
+  const right = scores[lag + 1] ?? scores[lag] ?? 0;
+  const denominator = left - 2 * center + right;
+  const offset =
+    Math.abs(denominator) > 0.000001
+      ? clamp(0.5 * (left - right) / denominator, -0.5, 0.5)
+      : 0;
+
+  return (lag + offset) * frameDuration;
+}
+
+function evaluateBeatInterval(beats: GridBeat[], duration: number, interval: number) {
+  if (beats.length === 0) {
+    return 0;
+  }
+
+  const start = Math.max(0.6, Math.min(duration * 0.12, interval * 2.4));
+  const end = Math.max(start + interval * 24, duration - Math.max(1.2, interval * 3));
+  const phase = findBestGridPhase(beats, duration, interval, start, end);
+  const snapWindow = interval * GRID_SNAP_WINDOW_RATIO;
+  let score = 0;
+  let matches = 0;
+
+  for (const beat of beats) {
+    if (beat.time < start - interval || beat.time > end + interval) {
+      continue;
+    }
+
+    const nearestGridIndex = Math.round((beat.time - phase) / interval);
+    const alignedTime = phase + nearestGridIndex * interval;
+    const distance = Math.abs(beat.time - alignedTime);
+
+    if (distance > snapWindow) {
+      continue;
+    }
+
+    const closeness = 1 - distance / snapWindow;
+    score += beat.strength * (0.42 + closeness * 0.58);
+    matches += 1;
+  }
+
+  return score / Math.sqrt(Math.max(1, (end - start) / interval)) + matches * 0.018;
+}
+
 function detectBeats(
   energyEnvelope: number[],
   rmsEnvelope: number[],
   frameDuration: number,
 ) {
   const beats: GridBeat[] = [];
-  const localRadius = Math.max(8, Math.round(0.44 / frameDuration));
-  const minGapFrames = Math.max(1, Math.round(0.36 / frameDuration));
+  const peakRadius = Math.max(1, Math.round(0.055 / frameDuration));
+  const thresholdRadius = Math.max(6, Math.round(0.24 / frameDuration));
+  const minGapFrames = Math.max(1, Math.round(0.14 / frameDuration));
   let lastBeatFrame = -minGapFrames;
 
-  for (let index = localRadius; index < energyEnvelope.length - localRadius; index += 1) {
+  for (let index = thresholdRadius; index < energyEnvelope.length - thresholdRadius; index += 1) {
     const current = energyEnvelope[index] ?? 0;
 
-    if (current <= (energyEnvelope[index - 1] ?? 0) || current < (energyEnvelope[index + 1] ?? 0)) {
+    if (current <= 0.01 || index - lastBeatFrame < minGapFrames) {
       continue;
     }
 
-    if (index - lastBeatFrame < minGapFrames) {
+    let isLocalPeak = true;
+
+    for (let offset = 1; offset <= peakRadius; offset += 1) {
+      if (
+        current < (energyEnvelope[index - offset] ?? 0) ||
+        current < (energyEnvelope[index + offset] ?? 0)
+      ) {
+        isLocalPeak = false;
+        break;
+      }
+    }
+
+    if (!isLocalPeak) {
       continue;
     }
 
     let localTotal = 0;
+    let localSquares = 0;
+    let localCount = 0;
 
-    for (let sampleIndex = index - localRadius; sampleIndex <= index + localRadius; sampleIndex += 1) {
-      localTotal += energyEnvelope[sampleIndex] ?? 0;
+    for (let sampleIndex = index - thresholdRadius; sampleIndex <= index + thresholdRadius; sampleIndex += 1) {
+      const sample = energyEnvelope[sampleIndex] ?? 0;
+      localTotal += sample;
+      localSquares += sample * sample;
+      localCount += 1;
     }
 
-    const localAverage = localTotal / (localRadius * 2 + 1);
-    const threshold = localAverage * 1.32 + 0.028;
+    const localAverage = localTotal / Math.max(1, localCount);
+    const variance = Math.max(0, localSquares / Math.max(1, localCount) - localAverage * localAverage);
+    const localDeviation = Math.sqrt(variance);
+    const prominence = current - localAverage;
+    const threshold = localAverage + localDeviation * 0.4 + 0.01;
 
-    if (current < threshold) {
+    if (current < threshold || prominence < 0.012) {
       continue;
     }
 
-    const strength = clamp((current - localAverage) * 3.5 + (rmsEnvelope[index] ?? 0) * 0.55, 0, 1);
+    const strength = clamp(
+      current * 0.74 + (rmsEnvelope[index] ?? 0) * 0.26 + prominence * 0.65,
+      0.18,
+      1,
+    );
 
     beats.push({
       time: index * frameDuration,
@@ -380,18 +497,95 @@ function detectBeats(
   return beats;
 }
 
-function estimateBeatInterval(beats: GridBeat[]) {
-  const gaps: number[] = [];
+function estimateBeatInterval(
+  beats: GridBeat[],
+  energyEnvelope: number[],
+  frameDuration: number,
+  duration: number,
+) {
+  if (beats.length < 8) {
+    return estimateBeatIntervalFromGaps(beats);
+  }
 
-  for (let index = 1; index < beats.length; index += 1) {
-    const gap = beats[index].time - beats[index - 1].time;
+  const minLag = Math.max(1, Math.round(MIN_PULSE_INTERVAL / frameDuration));
+  const maxLag = Math.max(minLag + 1, Math.round(MAX_PULSE_INTERVAL / frameDuration));
+  const lagScores = new Array<number>(maxLag + 1).fill(0);
 
-    if (gap >= 0.32 && gap <= 0.78) {
-      gaps.push(gap);
+  for (let lag = minLag; lag <= maxLag; lag += 1) {
+    lagScores[lag] = calculateLagCorrelation(energyEnvelope, lag);
+  }
+
+  const smoothedLagScores = lagScores.map((_, index) => {
+    if (index < minLag || index > maxLag) {
+      return 0;
+    }
+
+    let total = 0;
+    let count = 0;
+
+    for (let offset = -1; offset <= 1; offset += 1) {
+      const sample = lagScores[index + offset];
+
+      if (sample === undefined) {
+        continue;
+      }
+
+      total += sample;
+      count += 1;
+    }
+
+    return count > 0 ? total / count : lagScores[index] ?? 0;
+  });
+  const strongestCorrelation = smoothedLagScores.reduce(
+    (currentPeak, value, index) => index >= minLag && index <= maxLag ? Math.max(currentPeak, value) : currentPeak,
+    0.0001,
+  );
+  const candidateLags: number[] = [];
+
+  for (let lag = minLag + 1; lag < maxLag; lag += 1) {
+    const current = smoothedLagScores[lag] ?? 0;
+
+    if (current <= (smoothedLagScores[lag - 1] ?? 0) || current < (smoothedLagScores[lag + 1] ?? 0)) {
+      continue;
+    }
+
+    candidateLags.push(lag);
+  }
+
+  const rankedCandidates = candidateLags
+    .sort((left, right) => (smoothedLagScores[right] ?? 0) - (smoothedLagScores[left] ?? 0))
+    .slice(0, 10)
+    .map((lag) => {
+      const interval = refineLagInterval(smoothedLagScores, lag, frameDuration);
+      const alignmentScore = evaluateBeatInterval(beats, duration, interval);
+      const correlationScore = (smoothedLagScores[lag] ?? 0) / strongestCorrelation;
+
+      return {
+        interval,
+        score: alignmentScore + correlationScore * 0.24,
+      };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  let bestInterval = rankedCandidates[0]?.interval ?? estimateBeatIntervalFromGaps(beats);
+  let bestScore = rankedCandidates[0]?.score ?? 0;
+
+  for (const candidate of rankedCandidates) {
+    const ratio = bestInterval / candidate.interval;
+
+    if (
+      candidate.interval < bestInterval &&
+      bestInterval >= 0.46 &&
+      candidate.interval <= 0.42 &&
+      Math.abs(ratio - 2) < 0.28 &&
+      candidate.score >= bestScore * 0.8
+    ) {
+      bestInterval = candidate.interval;
+      bestScore = candidate.score;
     }
   }
 
-  return clamp(median(gaps) || 0.52, 0.42, 0.64);
+  return clamp(bestInterval, MIN_PULSE_INTERVAL, MAX_PULSE_INTERVAL);
 }
 
 function sampleStrengthAtTime(beats: GridBeat[], time: number, interval: number) {
@@ -458,10 +652,11 @@ function findBestGridPhase(
 
 function createJumpTimeline(beats: GridBeat[], duration: number, interval: number) {
   const timeline: GridBeat[] = [];
-  const start = 0.82;
-  const end = duration - 1.55;
+  const start = Math.max(0.68, interval * 2.4);
+  const end = duration - Math.max(1.15, interval * 3);
   const bestPhase = findBestGridPhase(beats, duration, interval, start, end);
   let cursor = bestPhase;
+  let searchIndex = 0;
 
   while (cursor + interval < start - 0.02) {
     cursor += interval;
@@ -476,10 +671,20 @@ function createJumpTimeline(beats: GridBeat[], duration: number, interval: numbe
   }
 
   while (cursor <= end) {
-    let nearestBeat: GridBeat | null = null;
-    let nearestDistance = interval * 0.18;
+    while (searchIndex < beats.length && beats[searchIndex].time < cursor - interval * 0.28) {
+      searchIndex += 1;
+    }
 
-    for (const beat of beats) {
+    let nearestBeat: GridBeat | null = null;
+    let nearestDistance = interval * GRID_SNAP_WINDOW_RATIO;
+
+    for (let beatIndex = searchIndex; beatIndex < beats.length; beatIndex += 1) {
+      const beat = beats[beatIndex];
+
+      if (beat.time > cursor + interval * 0.28) {
+        break;
+      }
+
       const distance = Math.abs(beat.time - cursor);
 
       if (distance < nearestDistance) {
@@ -488,11 +693,17 @@ function createJumpTimeline(beats: GridBeat[], duration: number, interval: numbe
       }
     }
 
-    const resolvedTime = nearestBeat?.time ?? cursor;
+    const resolvedTime = nearestBeat
+      ? clamp(
+          cursor + (nearestBeat.time - cursor) * 0.84,
+          cursor - interval * 0.12,
+          cursor + interval * 0.12,
+        )
+      : cursor;
     const interpolatedStrength = sampleStrengthAtTime(beats, resolvedTime, interval);
     const strength = clamp(
-      (nearestBeat?.strength ?? 0.48) * 0.78 + interpolatedStrength * 0.36,
-      0.34,
+      (nearestBeat?.strength ?? interpolatedStrength) * 0.72 + interpolatedStrength * 0.38,
+      0.32,
       1,
     );
     const lastBeat = timeline[timeline.length - 1];
@@ -505,7 +716,7 @@ function createJumpTimeline(beats: GridBeat[], duration: number, interval: numbe
       });
     }
 
-    cursor += interval;
+    cursor += interval + clamp((resolvedTime - cursor) * 0.22, -interval * 0.08, interval * 0.08);
   }
 
   return timeline;
@@ -536,9 +747,11 @@ function createSpikeObstacle(
   baseY = 0,
   leadBias = 0,
 ) {
+  const syncedFrontDelay = (frontDelay + leadBias) * OBSTACLE_SYNC_OFFSET_SCALE;
+
   return {
     kind: "spike" as const,
-    time: createObstacleCenterTime(beat.time + frontDelay + leadBias, width),
+    time: createObstacleCenterTime(beat.time + syncedFrontDelay, width),
     baseY,
     width,
     height,
@@ -559,9 +772,11 @@ function createBlockObstacle(
   baseY = 0,
   leadBias = 0,
 ) {
+  const syncedFrontDelay = (frontDelay + leadBias) * OBSTACLE_SYNC_OFFSET_SCALE;
+
   return {
     kind: "block" as const,
-    time: createObstacleCenterTime(beat.time + frontDelay + leadBias, width),
+    time: createObstacleCenterTime(beat.time + syncedFrontDelay, width),
     baseY,
     width,
     height,
@@ -732,6 +947,54 @@ function getGroundPatternPool(profile: TrackProfile, sectionProgress: number, ba
   );
 }
 
+function rotatePattern(pattern: ObstacleToken[], offset: number) {
+  if (pattern.length === 0) {
+    return pattern;
+  }
+
+  const normalizedOffset = ((offset % pattern.length) + pattern.length) % pattern.length;
+
+  if (normalizedOffset === 0) {
+    return [...pattern];
+  }
+
+  return pattern.map((_, index) => pattern[(index - normalizedOffset + pattern.length) % pattern.length] ?? null);
+}
+
+function mutateGroundPattern(
+  pattern: ObstacleToken[],
+  variant: number,
+  sectionProgress: number,
+  barEnergy: number,
+) {
+  const rotated = rotatePattern(pattern, variant % 2 === 0 ? 0 : 2);
+  const basePattern = variant % 3 === 1 ? [...rotated].reverse() : rotated;
+
+  return basePattern.map((token, index) => {
+    if (!token) {
+      if (sectionProgress > 0.64 && barEnergy > 0.72 && variant % 5 === 0 && index % 4 === 2) {
+        return "tap";
+      }
+
+      return null;
+    }
+
+    if (token === "tap" && sectionProgress > 0.42 && variant % 4 === 2 && index % 3 === 0) {
+      return "step";
+    }
+
+    if (token === "step" && sectionProgress > 0.74 && barEnergy > 0.68 && variant % 6 === 4) {
+      return "hold";
+    }
+
+    if (token === "bridge" && sectionProgress > 0.82 && variant % 5 === 3) {
+      return "hold";
+    }
+
+    return token;
+  });
+}
+
 function buildGroundBar(
   profile: TrackProfile,
   barBeats: GridBeat[],
@@ -741,7 +1004,13 @@ function buildGroundBar(
   leadBias: number,
 ) {
   const patternPool = getGroundPatternPool(profile, sectionProgress, barIndex);
-  const pattern = patternPool[(barIndex + Math.round(barEnergy * 4)) % patternPool.length];
+  const basePattern = patternPool[(barIndex + Math.round(barEnergy * 4)) % patternPool.length] ?? patternPool[0] ?? [];
+  const pattern = mutateGroundPattern(
+    basePattern,
+    barIndex + Math.round(sectionProgress * 10) + Math.round(barEnergy * 12),
+    sectionProgress,
+    barEnergy,
+  );
   const cues: BeatPoint[] = [];
   const obstacles: Obstacle[] = [];
 
@@ -1685,38 +1954,56 @@ function chooseSectionType(
   }
 
   const phase = getSectionPhase(profile, sectionProgress);
-  const candidatePool =
-    phase.accentCycle.length > 0 && barEnergy >= phase.accentEnergy && barEnergy >= previousBarEnergy - 0.02
-      ? phase.accentCycle
-      : phase.cycle;
-  const seed = barIndex + Math.round(barEnergy * 8) + Math.round(sectionProgress * 5);
-  let candidate = candidatePool[seed % candidatePool.length] ?? "ground";
+  const wantsAccentSection =
+    phase.accentCycle.length > 0 &&
+    (
+      barEnergy >= phase.accentEnergy ||
+      barEnergy > previousBarEnergy + 0.05 ||
+      barIndex % (sectionProgress > 0.68 ? 3 : 4) === 0
+    );
+  const targetDifficulty = clamp(
+    1.1 + sectionProgress * 3.25 + Math.max(0, barEnergy - previousBarEnergy) * 1.4,
+    1,
+    4.7,
+  );
+  const candidatePool = wantsAccentSection
+    ? [...phase.accentCycle, ...phase.cycle]
+    : [...phase.cycle, ...phase.accentCycle];
+  let bestCandidate: SectionType = "ground";
+  let bestScore = Number.POSITIVE_INFINITY;
 
-  if (
-    sectionProgress < 0.26 &&
-    (candidate === "gauntlet" || candidate === "tower" || candidate === "space")
-  ) {
-    candidate = "climb";
-  }
+  for (const candidate of candidatePool) {
+    const recentRepeatPenalty = recentSections[recentSections.length - 1] === candidate ? 0.8 : 0;
+    const chainPenalty =
+      recentSections.length >= 2 && recentSections.slice(-2).every((section) => section === candidate)
+        ? 1.2
+        : 0;
+    const accentPenalty =
+      wantsAccentSection && !phase.accentCycle.includes(candidate)
+        ? 0.55
+        : !wantsAccentSection && phase.accentCycle.includes(candidate)
+          ? 0.28
+          : 0;
+    const earlyProgressPenalty =
+      sectionProgress < 0.24 && SECTION_DIFFICULTY[candidate] > 2.6
+        ? 3
+        : sectionProgress < 0.4 && SECTION_DIFFICULTY[candidate] > 3.5
+          ? 1.5
+          : 0;
+    const score =
+      Math.abs(SECTION_DIFFICULTY[candidate] - targetDifficulty) +
+      recentRepeatPenalty +
+      chainPenalty +
+      accentPenalty +
+      earlyProgressPenalty;
 
-  if (sectionProgress < 0.18 && (candidate === "floating" || candidate === "descent")) {
-    candidate = "ground";
-  }
-
-  if (
-    candidate !== "ground" &&
-    recentSections.length >= 2 &&
-    recentSections.slice(-2).every((section) => section === candidate)
-  ) {
-    const fallbackPool = [...phase.cycle, ...phase.accentCycle];
-    const alternative = fallbackPool.find((section) => section !== candidate);
-
-    if (alternative) {
-      candidate = alternative;
+    if (score < bestScore) {
+      bestCandidate = candidate;
+      bestScore = score;
     }
   }
 
-  return candidate;
+  return bestCandidate;
 }
 
 function chooseSectionTheme(
@@ -2279,9 +2566,9 @@ function repairLayout(
 
 export function analyzeAudioBuffer(buffer: AudioBuffer, trackId: TrackId = "default"): LevelData {
   const mono = createMonoBuffer(buffer);
-  const frameSize = 2048;
-  const hopSize = 1024;
-  const frameCount = Math.max(1, Math.floor((mono.length - frameSize) / hopSize));
+  const frameSize = 1024;
+  const hopSize = 512;
+  const frameCount = Math.max(1, Math.floor(Math.max(0, mono.length - frameSize) / hopSize) + 1);
   const rmsValues = new Array<number>(frameCount);
   const fluxValues = new Array<number>(frameCount);
 
@@ -2305,13 +2592,25 @@ export function analyzeAudioBuffer(buffer: AudioBuffer, trackId: TrackId = "defa
 
   const normalizedRms = normalize(rmsValues);
   const normalizedFlux = normalize(fluxValues);
-  const combinedEnergy = normalizedRms.map(
-    (value, index) => value * 0.62 + (normalizedFlux[index] ?? 0) * 0.38,
+  const smoothedRms = smooth(normalizedRms, 2);
+  const smoothedFlux = smooth(normalizedFlux, 1);
+  const pulseEnvelope = normalize(
+    smoothedFlux.map((value, index) => {
+      const previousRms = smoothedRms[index - 1] ?? (smoothedRms[index] ?? 0);
+      const previousFlux = smoothedFlux[index - 1] ?? value;
+      const rmsRise = Math.max(0, (smoothedRms[index] ?? 0) - previousRms);
+      const fluxRise = Math.max(0, value - previousFlux);
+
+      return value * 0.36 + fluxRise * 0.94 + rmsRise * 0.58 + (smoothedRms[index] ?? 0) * 0.18;
+    }),
   );
-  const smoothedEnergy = smooth(combinedEnergy, 4);
+  const displayEnergy = smooth(
+    smoothedRms.map((value, index) => value * 0.58 + (smoothedFlux[index] ?? 0) * 0.42),
+    2,
+  );
   const frameDuration = hopSize / buffer.sampleRate;
-  const detectedBeats = detectBeats(smoothedEnergy, normalizedRms, frameDuration);
-  const beatInterval = estimateBeatInterval(detectedBeats);
+  const detectedBeats = detectBeats(pulseEnvelope, smoothedRms, frameDuration);
+  const beatInterval = estimateBeatInterval(detectedBeats, pulseEnvelope, frameDuration, buffer.duration);
   const gridBeats = createJumpTimeline(detectedBeats, buffer.duration, beatInterval);
   const layout = buildLevelLayout(gridBeats, buffer.duration, trackId);
   const repairedLayout = repairLayout(
@@ -2326,7 +2625,7 @@ export function analyzeAudioBuffer(buffer: AudioBuffer, trackId: TrackId = "defa
     duration: buffer.duration,
     beatInterval,
     waveform: sampleBuckets(mono, WAVEFORM_BAR_COUNT),
-    energyCurve: sampleBuckets(smoothedEnergy, ENERGY_SAMPLE_COUNT),
+    energyCurve: sampleBuckets(displayEnergy, ENERGY_SAMPLE_COUNT),
     beats: layout.cues,
     obstacles: repairedLayout.obstacles,
     lavaZones: repairedLayout.lavaZones,

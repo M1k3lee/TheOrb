@@ -1471,8 +1471,8 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
 
       {spikes.map((_, index) => {
         const x = -obstacle.width / 2 + spikeWidth * (index + 0.5);
-        const height = obstacle.height * (0.94 + (index % 2) * 0.08);
-        const radius = Math.max(0.28, spikeWidth * 0.34);
+        const height = obstacle.height;
+        const radius = Math.max(0.36, spikeWidth * 0.5);
 
         return (
           <mesh
@@ -1480,12 +1480,12 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
             position={[x, height / 2, 0]}
             scale={
               isShardField || isElevatedHazard
-                ? [0.78, Math.max(1.1, height / Math.max(radius * 2, 0.01)), 0.78]
-                : [1, 1, 1]
+                ? [1.02, Math.max(1, height / Math.max(radius * 2, 0.01)), 0.9]
+                : [1, 1, 0.92]
             }
           >
             {isShardField || isElevatedHazard ? (
-              <octahedronGeometry args={[radius * 0.96, 0]} />
+              <octahedronGeometry args={[radius, 0]} />
             ) : (
               <coneGeometry args={[radius, height, 4]} />
             )}

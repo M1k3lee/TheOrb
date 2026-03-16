@@ -60,6 +60,22 @@ const LAVA_SURFACE_Y = 0.22;
 const EARLY_BEAT_SNAP_WINDOW = 0.16;
 const JUMP_SCHEDULE_TOLERANCE = 0.012;
 
+function getBeatLateWindow(beatInterval: number) {
+  return Math.min(BEAT_LATE_WINDOW, beatInterval * 0.24);
+}
+
+function getPerfectBeatWindow(beatInterval: number) {
+  return Math.min(PERFECT_BEAT_WINDOW, beatInterval * 0.15);
+}
+
+function getGoodBeatWindow(beatInterval: number) {
+  return Math.min(GOOD_BEAT_WINDOW, beatInterval * 0.28);
+}
+
+function getEarlyBeatSnapWindow(beatInterval: number) {
+  return Math.min(EARLY_BEAT_SNAP_WINDOW, beatInterval * 0.42);
+}
+
 function createRuntimeState(status: GameStatus): RuntimeState {
   return {
     status,
@@ -236,18 +252,19 @@ function createIdleAudio(now: number, level: LevelData | null, runtime: RuntimeS
   };
 }
 
-function advanceCueIndex(cues: BeatPoint[], time: number, currentIndex: number) {
+function advanceCueIndex(cues: BeatPoint[], time: number, currentIndex: number, beatInterval: number) {
+  const lateWindow = getBeatLateWindow(beatInterval);
   let nextIndex = currentIndex;
 
-  while (nextIndex < cues.length && cues[nextIndex].time < time - BEAT_LATE_WINDOW) {
+  while (nextIndex < cues.length && cues[nextIndex].time < time - lateWindow) {
     nextIndex += 1;
   }
 
   return nextIndex;
 }
 
-function findNearestCue(cues: BeatPoint[], time: number, currentIndex: number) {
-  const nextIndex = advanceCueIndex(cues, time, currentIndex);
+function findNearestCue(cues: BeatPoint[], time: number, currentIndex: number, beatInterval: number) {
+  const nextIndex = advanceCueIndex(cues, time, currentIndex, beatInterval);
   const nextCue = cues[nextIndex] ?? null;
   const previousCue = nextIndex > 0 ? cues[nextIndex - 1] : null;
 
@@ -272,10 +289,11 @@ function findNearestCue(cues: BeatPoint[], time: number, currentIndex: number) {
 function applyQueuedJumpTiming(
   action: BeatPoint["action"] | undefined,
   beatError: number,
+  beatInterval: number,
   queuedJumpBoostRef: MutableRefObject<number>,
   queuedJumpHoldLimitRef: MutableRefObject<number>,
 ) {
-  if (beatError <= PERFECT_BEAT_WINDOW) {
+  if (beatError <= getPerfectBeatWindow(beatInterval)) {
     queuedJumpBoostRef.current = PERFECT_JUMP_BOOST;
     queuedJumpHoldLimitRef.current = Math.max(
       PERFECT_HOLD_LIMIT,
@@ -286,7 +304,7 @@ function applyQueuedJumpTiming(
     return;
   }
 
-  if (beatError <= GOOD_BEAT_WINDOW) {
+  if (beatError <= getGoodBeatWindow(beatInterval)) {
     queuedJumpBoostRef.current = GOOD_JUMP_BOOST;
     queuedJumpHoldLimitRef.current = Math.max(
       GOOD_HOLD_LIMIT,
@@ -485,11 +503,22 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       return;
     }
 
-    const cueIndex = advanceCueIndex(currentLevel.beats, runtime.time, nextCueIndexRef.current);
+    const cueIndex = advanceCueIndex(
+      currentLevel.beats,
+      runtime.time,
+      nextCueIndexRef.current,
+      currentLevel.beatInterval,
+    );
     nextCueIndexRef.current = cueIndex;
-    const nearestCue = findNearestCue(currentLevel.beats, runtime.time, cueIndex);
+    const nearestCue = findNearestCue(
+      currentLevel.beats,
+      runtime.time,
+      cueIndex,
+      currentLevel.beatInterval,
+    );
     const upcomingCue = currentLevel.beats[cueIndex] ?? null;
     const beatError = Math.abs(nearestCue?.delta ?? Number.POSITIVE_INFINITY);
+    const earlyBeatSnapWindow = getEarlyBeatSnapWindow(currentLevel.beatInterval);
 
     if (
       (runtime.grounded || coyoteTimeRef.current > 0) &&
@@ -498,11 +527,12 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     ) {
       const earlyDelta = upcomingCue.time - runtime.time;
 
-      if (earlyDelta <= EARLY_BEAT_SNAP_WINDOW) {
+      if (earlyDelta <= earlyBeatSnapWindow) {
         scheduledJumpTimeRef.current = upcomingCue.time;
         applyQueuedJumpTiming(
           upcomingCue.action,
           earlyDelta,
+          currentLevel.beatInterval,
           queuedJumpBoostRef,
           queuedJumpHoldLimitRef,
         );
@@ -515,6 +545,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     applyQueuedJumpTiming(
       nearestCue?.cue.action,
       beatError,
+      currentLevel.beatInterval,
       queuedJumpBoostRef,
       queuedJumpHoldLimitRef,
     );
@@ -612,7 +643,12 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
         runtime.time = engine.getCurrentTime();
         runtime.crashFlash = Math.max(0, runtime.crashFlash - delta * 1.3);
         jumpBufferRef.current = Math.max(0, jumpBufferRef.current - delta);
-        nextCueIndexRef.current = advanceCueIndex(currentLevel.beats, runtime.time, nextCueIndexRef.current);
+        nextCueIndexRef.current = advanceCueIndex(
+          currentLevel.beats,
+          runtime.time,
+          nextCueIndexRef.current,
+          currentLevel.beatInterval,
+        );
         coyoteTimeRef.current = runtime.grounded
           ? COYOTE_TIME
           : Math.max(0, coyoteTimeRef.current - delta);
