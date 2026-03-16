@@ -1,6 +1,11 @@
 import {
   COYOTE_TIME,
   FALL_GRAVITY_MULTIPLIER,
+  FLIGHT_DRAG,
+  FLIGHT_FALL_ACCELERATION,
+  FLIGHT_LANE_HEIGHTS,
+  FLIGHT_MAX_SPEED,
+  FLIGHT_THRUST_ACCELERATION,
   GRAVITY,
   GROUND_Y,
   HOLD_JUMP_GRAVITY_MULTIPLIER,
@@ -130,21 +135,21 @@ const DOWNBOY_PROFILE: TrackProfile = {
     {
       untilProgress: 0.48,
       cycle: ["ground", "climb", "bridge", "ground", "drop", "floating"],
-      accentCycle: ["climb", "bridge", "tower"],
+      accentCycle: ["climb", "bridge", "tower", "flight"],
       lavaFloor: 0.3,
       accentEnergy: 0.7,
     },
     {
       untilProgress: 0.78,
       cycle: ["climb", "bridge", "drop", "ground", "tower", "descent"],
-      accentCycle: ["tower", "gauntlet", "space"],
+      accentCycle: ["tower", "gauntlet", "space", "flight"],
       lavaFloor: 0.36,
       accentEnergy: 0.74,
     },
     {
       untilProgress: 1.01,
-      cycle: ["tower", "gauntlet", "drop", "floating", "bridge", "space", "descent"],
-      accentCycle: ["tower", "gauntlet", "space", "descent"],
+      cycle: ["tower", "gauntlet", "drop", "floating", "bridge", "space", "flight", "descent"],
+      accentCycle: ["tower", "gauntlet", "space", "flight", "descent"],
       lavaFloor: 0.28,
       accentEnergy: 0.76,
     },
@@ -206,21 +211,21 @@ const FOUND_DA_PROFILE: TrackProfile = {
     {
       untilProgress: 0.42,
       cycle: ["climb", "floating", "ground", "drop", "bridge", "descent"],
-      accentCycle: ["tower", "floating", "drop"],
+      accentCycle: ["tower", "floating", "drop", "flight"],
       lavaFloor: 0.34,
       accentEnergy: 0.7,
     },
     {
       untilProgress: 0.74,
       cycle: ["tower", "drop", "climb", "bridge", "ground", "floating", "space"],
-      accentCycle: ["tower", "gauntlet", "drop", "space"],
+      accentCycle: ["tower", "gauntlet", "drop", "space", "flight"],
       lavaFloor: 0.26,
       accentEnergy: 0.74,
     },
     {
       untilProgress: 1.01,
-      cycle: ["tower", "gauntlet", "tower", "floating", "drop", "bridge", "space", "descent"],
-      accentCycle: ["tower", "gauntlet", "floating", "space"],
+      cycle: ["tower", "gauntlet", "tower", "floating", "drop", "bridge", "space", "flight", "descent"],
+      accentCycle: ["tower", "gauntlet", "floating", "space", "flight"],
       lavaFloor: 0.22,
       accentEnergy: 0.76,
     },
@@ -236,6 +241,7 @@ const SECTION_THEME_POOLS: Record<SectionType, LevelSectionTheme[]> = {
   bridge: ["sky", "pulse"],
   gauntlet: ["forge", "void"],
   floating: ["sky", "prism"],
+  flight: ["sky", "void"],
   tower: ["citadel", "forge"],
   space: ["void", "sky"],
   descent: ["solar", "forge"],
@@ -247,6 +253,7 @@ const SECTION_DIFFICULTY: Record<SectionType, number> = {
   bridge: 2.2,
   drop: 2.5,
   floating: 2.9,
+  flight: 3.8,
   tower: 3.5,
   descent: 3.7,
   gauntlet: 4.2,
@@ -1460,6 +1467,108 @@ function buildFloatingStepsBar(
   } satisfies GeneratedBar;
 }
 
+function createFlightCue(beat: GridBeat, lane: number): BeatPoint {
+  return {
+    time: beat.time,
+    strength: beat.strength,
+    lane,
+    action: "flight",
+  };
+}
+
+function buildFlightBar(
+  barBeats: GridBeat[],
+  barIndex: number,
+  sectionProgress: number,
+  barEnergy: number,
+  leadBias: number,
+) {
+  const cueOffsets = [0, 1, 2, 3, 4, 5];
+  const lanePatterns = [
+    [1, 2, 1, 0, 1, 1],
+    [1, 1, 2, 1, 0, 1],
+    [1, 0, 1, 2, 1, 1],
+    [1, 2, 2, 1, 0, 1],
+    [1, 1, 0, 1, 2, 1],
+    [1, 2, 1, 1, 2, 0],
+  ] as const;
+  const lanePattern =
+    lanePatterns[(barIndex + Math.round(barEnergy * 10) + Math.round(sectionProgress * 6)) % lanePatterns.length] ??
+    lanePatterns[0];
+  const corridorGap = clamp(2.62 - sectionProgress * 0.34 - barEnergy * 0.08, 2.04, 2.62);
+  const obstacles: Obstacle[] = [];
+
+  for (let index = 0; index < cueOffsets.length; index += 1) {
+    const beatOffset = cueOffsets[index];
+    const beat = barBeats[beatOffset];
+    const lane = lanePattern[index] ?? 1;
+    const laneHeight = FLIGHT_LANE_HEIGHTS[lane] ?? FLIGHT_LANE_HEIGHTS[1];
+    const gapBottom = clamp(laneHeight - corridorGap * 0.5 - 0.08, 0.96, 4.2);
+    const gapTop = clamp(laneHeight + corridorGap * 0.5 + 0.08, gapBottom + 1.5, 5.78);
+    const width =
+      index === 0 || index === cueOffsets.length - 1
+        ? 5.8
+        : clamp(4.08 + (index % 2) * 0.4 + barEnergy * 0.18, 4.08, 4.92);
+    if (index === 0) {
+      continue;
+    }
+
+    const floorBlock = createBlockObstacle(
+      beat,
+      barIndex * BAR_BEAT_COUNT + 600 + beatOffset,
+      width,
+      gapBottom,
+      0.04,
+      198,
+      0.44 + barEnergy * 0.18,
+      0,
+      leadBias,
+    );
+    const ceilingBlock = createBlockObstacle(
+      beat,
+      barIndex * BAR_BEAT_COUNT + 660 + beatOffset,
+      width,
+      6.62 - gapTop,
+      0.04,
+      214,
+      0.38 + barEnergy * 0.16,
+      gapTop,
+      leadBias,
+    );
+
+    obstacles.push(floorBlock, ceilingBlock);
+  }
+
+  const voidZone = createHazardZoneForObstacles(
+    obstacles,
+    0.78 + barEnergy * 0.18,
+    218 + ((barIndex * 9) % 28),
+    0.04,
+    0.24,
+    "void",
+  );
+
+  return {
+    cues: cueOffsets.map((offset, index) => createFlightCue(barBeats[offset], lanePattern[index] ?? 1)),
+    obstacles,
+    lavaZones: voidZone ? [voidZone] : [],
+    cameraMoments: [
+      {
+        time: barBeats[1]?.time ?? barBeats[0].time,
+        duration: 0.96,
+        strength: 0.76 + barEnergy * 0.14,
+        style: "hero",
+      },
+      {
+        time: barBeats[4]?.time ?? barBeats[3].time,
+        duration: 0.82,
+        strength: 0.82 + barEnergy * 0.12,
+        style: "rush",
+      },
+    ],
+  } satisfies GeneratedBar;
+}
+
 function buildTowerBar(
   barBeats: GridBeat[],
   barIndex: number,
@@ -2168,6 +2277,8 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number, trackId: Trac
               ? buildBridgeBar(barBeats, barIndex, barEnergy, useLava, leadBias)
               : sectionType === "floating"
                 ? buildFloatingStepsBar(barBeats, barIndex, barEnergy, useLava, leadBias)
+                : sectionType === "flight"
+                  ? buildFlightBar(barBeats, barIndex, sectionProgress, barEnergy, leadBias)
                 : sectionType === "tower"
                   ? buildTowerBar(barBeats, barIndex, sectionProgress, barEnergy, useLava, leadBias)
                   : sectionType === "space"
@@ -2252,6 +2363,20 @@ function isOverLava(lavaZones: LavaZone[], time: number) {
   }
 
   return false;
+}
+
+function getSectionKindAtTime(sections: LevelSection[], time: number): LevelSectionKind {
+  for (const section of sections) {
+    if (time < section.startTime) {
+      return "ground";
+    }
+
+    if (time <= section.endTime) {
+      return section.kind;
+    }
+  }
+
+  return "ground";
 }
 
 function resolveSimulatedCollisions(
@@ -2357,6 +2482,73 @@ function resolveSimulatedCollisions(
   };
 }
 
+function resolveSimulatedFlightCollisions(
+  obstacles: Obstacle[],
+  lavaZones: LavaZone[],
+  time: number,
+  nextY: number,
+  nextVelocity: number,
+) {
+  const overLava = isOverLava(lavaZones, time);
+  const bottomOffset = PLAYER_COLLISION_RADIUS * 0.84;
+  const topOffset = PLAYER_COLLISION_RADIUS * 0.72;
+  const playerBottom = nextY - bottomOffset;
+  const playerTop = nextY + topOffset;
+
+  if (overLava && playerBottom < LAVA_SURFACE_Y) {
+    return {
+      crashed: true,
+      grounded: false,
+      playerY: nextY,
+      playerVelocity: nextVelocity,
+    };
+  }
+
+  for (const obstacle of obstacles) {
+    const relativeX = (obstacle.time - time) * RUN_SPEED;
+    const horizontalReach = obstacle.width / 2 + PLAYER_COLLISION_RADIUS;
+
+    if (relativeX < -horizontalReach) {
+      continue;
+    }
+
+    if (relativeX > horizontalReach + 4) {
+      break;
+    }
+
+    if (obstacle.kind === "spike") {
+      if (playerBottom < sampleObstacleHeight(obstacle, relativeX) && playerTop > obstacle.baseY + 0.08) {
+        return {
+          crashed: true,
+          grounded: false,
+          playerY: nextY,
+          playerVelocity: nextVelocity,
+        };
+      }
+
+      continue;
+    }
+
+    const withinBody = Math.abs(relativeX) < obstacle.width / 2 + PLAYER_COLLISION_RADIUS * 0.12;
+
+    if (withinBody && playerBottom < obstacle.baseY + obstacle.height - 0.04 && playerTop > obstacle.baseY + 0.08) {
+      return {
+        crashed: true,
+        grounded: false,
+        playerY: nextY,
+        playerVelocity: nextVelocity,
+      };
+    }
+  }
+
+  return {
+    crashed: false,
+    grounded: false,
+    playerY: nextY,
+    playerVelocity: nextVelocity,
+  };
+}
+
 function getCueHoldDuration(action: BeatPoint["action"]) {
   if (action === "hold") {
     return 0.14;
@@ -2381,6 +2573,7 @@ function simulateLayout(
   cues: BeatPoint[],
   obstacles: Obstacle[],
   lavaZones: LavaZone[],
+  sections: LevelSection[],
   duration: number,
 ) {
   let time = 0;
@@ -2389,57 +2582,104 @@ function simulateLayout(
   let grounded = true;
   let holdTime = 0;
   let cueIndex = 0;
+  const flightCues = cues.filter((cue) => cue.action === "flight");
+  let flightCueIndex = 0;
   let coyoteTime = COYOTE_TIME;
 
   while (time < duration - 0.08) {
-    while (cueIndex < cues.length && cues[cueIndex].time <= time + SIMULATION_STEP * 0.5) {
-      if (grounded || coyoteTime > 0) {
-        grounded = false;
-        playerVelocity = JUMP_VELOCITY;
-        holdTime = getCueHoldDuration(cues[cueIndex].action);
-        coyoteTime = 0;
-      }
-
-      cueIndex += 1;
-    }
-
+    const sectionKind = getSectionKindAtTime(sections, time);
     const previousY = playerY;
 
-    if (!grounded) {
-      let gravity = GRAVITY;
+    if (sectionKind === "flight") {
+      grounded = false;
 
-      if (playerVelocity > 0) {
-        if (holdTime > 0) {
-          gravity *= HOLD_JUMP_GRAVITY_MULTIPLIER;
-          holdTime = Math.max(0, holdTime - SIMULATION_STEP);
-        } else {
-          gravity *= LOW_JUMP_GRAVITY_MULTIPLIER;
-        }
-      } else {
-        gravity *= FALL_GRAVITY_MULTIPLIER;
+      while (flightCueIndex < flightCues.length - 1 && flightCues[flightCueIndex + 1].time < time) {
+        flightCueIndex += 1;
       }
 
-      playerVelocity -= gravity * SIMULATION_STEP;
+      const previousFlightCue = flightCues[flightCueIndex] ?? null;
+      const nextFlightCue = flightCues[flightCueIndex + 1] ?? previousFlightCue;
+      const previousTargetY = previousFlightCue
+        ? FLIGHT_LANE_HEIGHTS[previousFlightCue.lane] ?? FLIGHT_LANE_HEIGHTS[1]
+        : FLIGHT_LANE_HEIGHTS[1];
+      const nextTargetY = nextFlightCue
+        ? FLIGHT_LANE_HEIGHTS[nextFlightCue.lane] ?? FLIGHT_LANE_HEIGHTS[1]
+        : previousTargetY;
+      const cueProgress =
+        previousFlightCue && nextFlightCue && nextFlightCue.time > previousFlightCue.time
+          ? clamp((time - previousFlightCue.time) / (nextFlightCue.time - previousFlightCue.time), 0, 1)
+          : 0;
+      const targetY = previousTargetY + (nextTargetY - previousTargetY) * cueProgress;
+      const wantsLift =
+        playerY < targetY - 0.08 ||
+        (playerVelocity < -0.8 && playerY < targetY + 0.18);
+
+      playerVelocity += (wantsLift ? FLIGHT_THRUST_ACCELERATION : -FLIGHT_FALL_ACCELERATION) * SIMULATION_STEP;
+      playerVelocity *= Math.exp(-FLIGHT_DRAG * SIMULATION_STEP);
+      playerVelocity = clamp(playerVelocity, -FLIGHT_MAX_SPEED, FLIGHT_MAX_SPEED);
       playerY += playerVelocity * SIMULATION_STEP;
-    } else if (playerY <= GROUND_Y + 0.001) {
-      playerY = GROUND_Y;
-      playerVelocity = 0;
-      holdTime = 0;
+    } else {
+      while (cueIndex < cues.length && cues[cueIndex].time <= time + SIMULATION_STEP * 0.5) {
+        if (cues[cueIndex].action !== "flight" && (grounded || coyoteTime > 0)) {
+          grounded = false;
+          playerVelocity = JUMP_VELOCITY;
+          holdTime = getCueHoldDuration(cues[cueIndex].action);
+          coyoteTime = 0;
+        }
+
+        cueIndex += 1;
+      }
+
+      if (!grounded) {
+        let gravity = GRAVITY;
+
+        if (playerVelocity > 0) {
+          if (holdTime > 0) {
+            gravity *= HOLD_JUMP_GRAVITY_MULTIPLIER;
+            holdTime = Math.max(0, holdTime - SIMULATION_STEP);
+          } else {
+            gravity *= LOW_JUMP_GRAVITY_MULTIPLIER;
+          }
+        } else {
+          gravity *= FALL_GRAVITY_MULTIPLIER;
+        }
+
+        playerVelocity -= gravity * SIMULATION_STEP;
+        playerY += playerVelocity * SIMULATION_STEP;
+      } else if (playerY <= GROUND_Y + 0.001) {
+        playerY = GROUND_Y;
+        playerVelocity = 0;
+        holdTime = 0;
+      }
     }
 
-    const collisionResult = resolveSimulatedCollisions(
-      obstacles,
-      lavaZones,
-      time,
-      previousY,
-      playerY,
-      playerVelocity,
-    );
+    const collisionResult =
+      sectionKind === "flight"
+        ? resolveSimulatedFlightCollisions(
+            obstacles,
+            lavaZones,
+            time,
+            playerY,
+            playerVelocity,
+          )
+        : resolveSimulatedCollisions(
+            obstacles,
+            lavaZones,
+            time,
+            previousY,
+            playerY,
+            playerVelocity,
+          );
 
     playerY = collisionResult.playerY;
     playerVelocity = collisionResult.playerVelocity;
     grounded = collisionResult.grounded;
-    coyoteTime = grounded ? COYOTE_TIME : Math.max(0, coyoteTime - SIMULATION_STEP);
+    coyoteTime =
+      sectionKind === "flight"
+        ? 0
+        : grounded
+          ? COYOTE_TIME
+          : Math.max(0, coyoteTime - SIMULATION_STEP);
 
     if (collisionResult.crashed) {
       return {
@@ -2524,17 +2764,37 @@ function repairLavaZonesNearCrash(lavaZones: LavaZone[], crashTime: number) {
   };
 }
 
+function forceClearCrashWindow(obstacles: Obstacle[], crashWindowStart: number, crashWindowEnd: number) {
+  let changed = false;
+  const nextObstacles = obstacles.filter((obstacle) => {
+    const overlaps = obstacleEndTime(obstacle) >= crashWindowStart && obstacleStartTime(obstacle) <= crashWindowEnd;
+
+    if (!overlaps) {
+      return true;
+    }
+
+    changed = true;
+    return false;
+  });
+
+  return {
+    obstacles: nextObstacles,
+    changed,
+  };
+}
+
 function repairLayout(
   cues: BeatPoint[],
   obstacles: Obstacle[],
   lavaZones: LavaZone[],
+  sections: LevelSection[],
   duration: number,
 ) {
   let repairedObstacles = [...obstacles];
   let repairedLavaZones = [...lavaZones];
 
   for (let iteration = 0; iteration < 24; iteration += 1) {
-    const crash = simulateLayout(cues, repairedObstacles, repairedLavaZones, duration);
+    const crash = simulateLayout(cues, repairedObstacles, repairedLavaZones, sections, duration);
 
     if (!crash) {
       return {
@@ -2554,7 +2814,17 @@ function repairLayout(
     repairedLavaZones = lavaRepair.lavaZones;
 
     if (!obstacleRepair.changed && !lavaRepair.changed) {
-      break;
+      const forcedRepair = forceClearCrashWindow(
+        repairedObstacles,
+        crash.obstacleWindowStart,
+        crash.obstacleWindowEnd,
+      );
+
+      repairedObstacles = forcedRepair.obstacles;
+
+      if (!forcedRepair.changed) {
+        break;
+      }
     }
   }
 
@@ -2617,6 +2887,7 @@ export function analyzeAudioBuffer(buffer: AudioBuffer, trackId: TrackId = "defa
     layout.cues,
     layout.obstacles,
     layout.lavaZones,
+    layout.sections,
     buffer.duration,
   );
 

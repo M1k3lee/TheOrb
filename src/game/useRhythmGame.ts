@@ -2,6 +2,10 @@ import { useEffect, useEffectEvent, useRef, useState, type MutableRefObject } fr
 import {
   COYOTE_TIME,
   FALL_GRAVITY_MULTIPLIER,
+  FLIGHT_DRAG,
+  FLIGHT_FALL_ACCELERATION,
+  FLIGHT_MAX_SPEED,
+  FLIGHT_THRUST_ACCELERATION,
   GRAVITY,
   GROUND_Y,
   HOLD_JUMP_GRAVITY_MULTIPLIER,
@@ -20,6 +24,7 @@ import type {
   GameStatus,
   LavaZone,
   LevelData,
+  MovementMode,
   Obstacle,
   TrackId,
 } from "./types";
@@ -30,6 +35,7 @@ interface RuntimeState {
   playerY: number;
   playerVelocity: number;
   grounded: boolean;
+  movementMode: MovementMode;
   crashFlash: number;
   bestProgress: number;
   deaths: number;
@@ -76,6 +82,26 @@ function getEarlyBeatSnapWindow(beatInterval: number) {
   return Math.min(EARLY_BEAT_SNAP_WINDOW, beatInterval * 0.42);
 }
 
+function getMovementModeForTime(level: LevelData | null, time: number): MovementMode {
+  const sections = level?.sections;
+
+  if (!sections) {
+    return "run";
+  }
+
+  for (const section of sections) {
+    if (time < section.startTime) {
+      return "run";
+    }
+
+    if (time <= section.endTime) {
+      return section.kind === "flight" ? "flight" : "run";
+    }
+  }
+
+  return "run";
+}
+
 function createRuntimeState(status: GameStatus): RuntimeState {
   return {
     status,
@@ -83,6 +109,7 @@ function createRuntimeState(status: GameStatus): RuntimeState {
     playerY: GROUND_Y,
     playerVelocity: 0,
     grounded: true,
+    movementMode: "run",
     crashFlash: 0,
     bestProgress: 0,
     deaths: 0,
@@ -97,6 +124,7 @@ function buildSnapshot(runtime: RuntimeState, level: LevelData | null, audio: Au
     playerY: runtime.playerY,
     playerVelocity: runtime.playerVelocity,
     grounded: runtime.grounded,
+    movementMode: runtime.movementMode,
     audio,
     crashFlash: runtime.crashFlash,
     bestProgress: runtime.bestProgress,
@@ -225,6 +253,73 @@ function resolvePlayerCollisions(
       playerY: supportY,
       playerVelocity: 0,
     };
+  }
+
+  return {
+    crashed: false,
+    grounded: false,
+    playerY: nextY,
+    playerVelocity: nextVelocity,
+  };
+}
+
+function resolveFlightCollisions(
+  obstacles: Obstacle[],
+  lavaZones: LavaZone[],
+  time: number,
+  nextY: number,
+  nextVelocity: number,
+): CollisionResult {
+  const overLava = isOverLava(lavaZones, time);
+  const bottomOffset = PLAYER_COLLISION_RADIUS * 0.84;
+  const topOffset = PLAYER_COLLISION_RADIUS * 0.72;
+  const playerBottom = nextY - bottomOffset;
+  const playerTop = nextY + topOffset;
+
+  if (overLava && playerBottom < LAVA_SURFACE_Y) {
+    return {
+      crashed: true,
+      grounded: false,
+      playerY: nextY,
+      playerVelocity: nextVelocity,
+    };
+  }
+
+  for (const obstacle of obstacles) {
+    const relativeX = (obstacle.time - time) * RUN_SPEED;
+    const horizontalReach = obstacle.width / 2 + PLAYER_COLLISION_RADIUS;
+
+    if (relativeX < -horizontalReach) {
+      continue;
+    }
+
+    if (relativeX > horizontalReach + 4) {
+      break;
+    }
+
+    if (obstacle.kind === "spike") {
+      if (playerBottom < sampleObstacleHeight(obstacle, relativeX) && playerTop > obstacle.baseY + 0.08) {
+        return {
+          crashed: true,
+          grounded: false,
+          playerY: nextY,
+          playerVelocity: nextVelocity,
+        };
+      }
+
+      continue;
+    }
+
+    const withinBody = Math.abs(relativeX) < obstacle.width / 2 + PLAYER_COLLISION_RADIUS * 0.12;
+
+    if (withinBody && playerBottom < obstacle.baseY + obstacle.height - 0.04 && playerTop > obstacle.baseY + 0.08) {
+      return {
+        crashed: true,
+        grounded: false,
+        playerY: nextY,
+        playerVelocity: nextVelocity,
+      };
+    }
   }
 
   return {
@@ -511,6 +606,14 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       return;
     }
 
+    if (runtime.status === "playing" && runtime.movementMode === "flight") {
+      scheduledJumpTimeRef.current = null;
+      jumpBufferRef.current = 0;
+      queuedJumpBoostRef.current = 1;
+      queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
+      return;
+    }
+
     if (runtime.status === "ready" || runtime.status === "crashed" || runtime.status === "finished") {
       void launchRun();
       return;
@@ -670,6 +773,24 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
 
       if (runtime.status === "playing" && engine && currentLevel) {
         runtime.time = engine.getCurrentTime();
+        const movementMode = getMovementModeForTime(currentLevel, runtime.time);
+        const modeChanged = runtime.movementMode !== movementMode;
+
+        if (modeChanged) {
+          runtime.movementMode = movementMode;
+          jumpBufferRef.current = 0;
+          scheduledJumpTimeRef.current = null;
+          queuedJumpBoostRef.current = 1;
+          queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
+          jumpHoldTimeRef.current = 0;
+          coyoteTimeRef.current = 0;
+
+          if (movementMode === "flight") {
+            runtime.grounded = false;
+            runtime.playerVelocity = 0;
+          }
+        }
+
         runtime.crashFlash = Math.max(0, runtime.crashFlash - delta * 1.3);
         jumpBufferRef.current = Math.max(0, jumpBufferRef.current - delta);
         nextCueIndexRef.current = advanceCueIndex(
@@ -686,6 +807,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
           scheduledJumpTimeRef.current !== null &&
           runtime.time + JUMP_SCHEDULE_TOLERANCE >= scheduledJumpTimeRef.current;
         const shouldJump =
+          runtime.movementMode === "run" &&
           (runtime.grounded || coyoteTimeRef.current > 0) &&
           jumpBufferRef.current > 0 &&
           (scheduledJumpTimeRef.current === null || dueScheduledJump);
@@ -701,7 +823,21 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
           queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
         }
 
-        if (!runtime.grounded) {
+        if (runtime.movementMode === "flight") {
+          runtime.grounded = false;
+
+          const acceleration = jumpHeldRef.current
+            ? FLIGHT_THRUST_ACCELERATION
+            : -FLIGHT_FALL_ACCELERATION;
+
+          runtime.playerVelocity += acceleration * delta;
+          runtime.playerVelocity *= Math.exp(-FLIGHT_DRAG * delta);
+          runtime.playerVelocity = Math.max(
+            -FLIGHT_MAX_SPEED,
+            Math.min(FLIGHT_MAX_SPEED, runtime.playerVelocity),
+          );
+          runtime.playerY += runtime.playerVelocity * delta;
+        } else if (!runtime.grounded) {
           let gravity = GRAVITY;
 
           if (runtime.playerVelocity > 0) {
@@ -723,14 +859,23 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
           jumpHoldTimeRef.current = 0;
         }
 
-        const collisionResult = resolvePlayerCollisions(
-          currentLevel.obstacles,
-          currentLevel.lavaZones,
-          runtime.time,
-          previousY,
-          runtime.playerY,
-          runtime.playerVelocity,
-        );
+        const collisionResult =
+          runtime.movementMode === "flight"
+            ? resolveFlightCollisions(
+                currentLevel.obstacles,
+                currentLevel.lavaZones,
+                runtime.time,
+                runtime.playerY,
+                runtime.playerVelocity,
+              )
+            : resolvePlayerCollisions(
+                currentLevel.obstacles,
+                currentLevel.lavaZones,
+                runtime.time,
+                previousY,
+                runtime.playerY,
+                runtime.playerVelocity,
+              );
 
         runtime.playerY = collisionResult.playerY;
         runtime.playerVelocity = collisionResult.playerVelocity;

@@ -3,6 +3,7 @@ import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import {
+  FLIGHT_LANE_HEIGHTS,
   GROUND_Y,
   PLAYER_VISUAL_RADIUS,
   PLAYER_TRACK_X,
@@ -596,6 +597,7 @@ function CameraRig({
     const beatPulse = Math.max(0, 1 - Math.min(beatPhase, 1 - beatPhase) * 5);
     const momentStrength = activeMoment?.strength ?? 0;
     const impact = Math.max(snapshot.audio.bass, beatPulse * 0.55, momentStrength * 0.72);
+    const inFlight = snapshot.movementMode === "flight";
     const shotFov =
       shot === "rush"
         ? 70
@@ -656,7 +658,7 @@ function CameraRig({
         PLAYER_TRACK_X - 1.2 + snapshot.audio.mid * 0.42,
         9.8 + (snapshot.playerY - GROUND_Y) * 0.16 + impact * 0.4,
         37.6 - snapshot.audio.overall * 1.8,
-      );
+        );
       lookTarget.current.set(
         PLAYER_TRACK_X + 24.4,
         snapshot.playerY * 0.84 + 0.96,
@@ -664,10 +666,28 @@ function CameraRig({
       );
     }
 
+    if (inFlight) {
+      targetPosition.current.lerp(
+        safetyLookTarget.current.set(
+          PLAYER_TRACK_X - 2.4 + snapshot.audio.mid * 0.2,
+          7.1 + (snapshot.playerY - GROUND_Y) * 0.48 + impact * 0.58,
+          16.2 - snapshot.audio.overall * 1.1,
+        ),
+        0.72,
+      );
+      lookTarget.current.set(
+        PLAYER_TRACK_X + 13.2,
+        snapshot.playerY * 0.98 + 0.42,
+        Math.sin(state.clock.elapsedTime * 1.3) * 0.38,
+      );
+    }
+
     const playerAnchorX = PLAYER_TRACK_X + 8.8;
     const playerAnchorY = snapshot.playerY * 0.88 + 0.96;
     const safetyBlend =
-      shot === "sweep"
+      inFlight
+        ? 0.16
+        : shot === "sweep"
         ? 0.44
         : shot === "hero"
           ? 0.38
@@ -684,18 +704,18 @@ function CameraRig({
       PLAYER_TRACK_X - 7.6,
       PLAYER_TRACK_X + 4.8,
     );
-    targetPosition.current.z = THREE.MathUtils.clamp(targetPosition.current.z, 12, 36);
+    targetPosition.current.z = THREE.MathUtils.clamp(targetPosition.current.z, 12, inFlight ? 26 : 36);
     lookTarget.current.x = THREE.MathUtils.clamp(
       lookTarget.current.x,
       PLAYER_TRACK_X + 8.4,
       PLAYER_TRACK_X + 15.2,
     );
-    lookTarget.current.z = THREE.MathUtils.clamp(lookTarget.current.z, -1.3, 1.3);
+    lookTarget.current.z = THREE.MathUtils.clamp(lookTarget.current.z, inFlight ? -1.8 : -1.3, inFlight ? 1.8 : 1.3);
 
     camera.position.lerp(targetPosition.current, 1 - Math.exp(-delta * 5));
 
     if (camera instanceof THREE.PerspectiveCamera) {
-      camera.fov += (shotFov - camera.fov) * (1 - Math.exp(-delta * 5.4));
+      camera.fov += ((inFlight ? shotFov + 4 : shotFov) - camera.fov) * (1 - Math.exp(-delta * 5.4));
       camera.updateProjectionMatrix();
     }
 
@@ -1038,22 +1058,35 @@ function Orb({ snapshotRef }: { snapshotRef: SnapshotRef }) {
 
   useFrame(() => {
     const snapshot = snapshotRef.current;
+    const inFlight = snapshot.movementMode === "flight";
     const pulse = 1 + snapshot.audio.overall * 0.18;
     const stretch = Math.min(0.2, Math.abs(snapshot.playerVelocity) * 0.009);
-    const scaleY = pulse * (snapshot.grounded ? 0.96 + snapshot.audio.bass * 0.1 : 1 + stretch);
-    const scaleX = pulse * (snapshot.grounded ? 1.08 - snapshot.audio.bass * 0.04 : 1 - stretch * 0.35);
-    const scaleZ = pulse * (1 + snapshot.audio.mid * 0.06);
+    const scaleY = inFlight
+      ? pulse * (1.05 + stretch * 0.3 + snapshot.audio.mid * 0.05)
+      : pulse * (snapshot.grounded ? 0.96 + snapshot.audio.bass * 0.1 : 1 + stretch);
+    const scaleX = inFlight
+      ? pulse * (0.98 - stretch * 0.16 + snapshot.audio.bass * 0.04)
+      : pulse * (snapshot.grounded ? 1.08 - snapshot.audio.bass * 0.04 : 1 - stretch * 0.35);
+    const scaleZ = pulse * (1 + snapshot.audio.mid * 0.06 + (inFlight ? 0.08 : 0));
 
     if (groupRef.current) {
       groupRef.current.position.set(PLAYER_TRACK_X, snapshot.playerY, 0);
+      groupRef.current.rotation.z = THREE.MathUtils.lerp(
+        groupRef.current.rotation.z,
+        inFlight ? THREE.MathUtils.clamp(snapshot.playerVelocity * 0.03, -0.34, 0.34) : 0,
+        0.14,
+      );
     }
 
     if (ringRef.current) {
       ringRef.current.rotation.y = snapshot.time * 2.8 + snapshot.audio.overall * 0.6;
+      ringRef.current.rotation.x = inFlight ? Math.sin(snapshot.time * 5.2) * 0.18 : 0;
     }
 
     if (shadowRef.current) {
       shadowRef.current.position.y = -snapshot.playerY + 0.04;
+      shadowRef.current.scale.setScalar(inFlight ? 0.64 + snapshot.audio.overall * 0.16 : 1);
+      shadowRef.current.visible = !inFlight || snapshot.playerY <= GROUND_Y + 3.8;
     }
 
     if (coreRef.current) {
@@ -1305,9 +1338,18 @@ function BeatRing({
   beat: BeatPoint;
   currentTime: number;
 }) {
+  const isFlightCue = beat.action === "flight";
   const proximity = Math.max(0, 1 - Math.abs(beat.time - currentTime) * 3.5);
   const actionScale =
-    beat.action === "climb" ? 0.28 : beat.action === "hold" ? 0.18 : beat.action === "bridge" ? 0.12 : 0;
+    beat.action === "flight"
+      ? 0.34
+      : beat.action === "climb"
+        ? 0.28
+        : beat.action === "hold"
+          ? 0.18
+          : beat.action === "bridge"
+            ? 0.12
+            : 0;
   const scale = 0.92 + beat.strength * 0.55 + proximity * 0.45 + actionScale;
   const brightness = 0.25 + beat.strength * 0.32 + proximity * 0.55;
   const actionHue =
@@ -1319,16 +1361,20 @@ function BeatRing({
           ? 194
           : beat.action === "bridge"
             ? 210
-            : 8;
+            : beat.action === "flight"
+              ? 292
+              : 8;
   const color = `hsl(${actionHue + beat.lane * 10} 92% 64%)`;
+  const ringY = isFlightCue ? (FLIGHT_LANE_HEIGHTS[beat.lane] ?? FLIGHT_LANE_HEIGHTS[1]) + 0.36 : 2.8 + beat.lane * 1.4;
+  const ringZ = isFlightCue ? -1.8 - beat.lane * 0.32 : -3.4 - beat.lane * 0.8;
 
   return (
     <group
-      position={[beat.time * RUN_SPEED, 2.8 + beat.lane * 1.4, -3.4 - beat.lane * 0.8]}
+      position={[beat.time * RUN_SPEED, ringY, ringZ]}
       scale={[scale, scale, scale]}
     >
       <mesh rotation={[0, Math.PI / 2, 0]}>
-        <torusGeometry args={[1.15, 0.1, 10, 24]} />
+        <torusGeometry args={[isFlightCue ? 1.3 : 1.15, isFlightCue ? 0.12 : 0.1, 10, 24]} />
         <meshBasicMaterial
           blending={THREE.AdditiveBlending}
           color={color}
@@ -1341,10 +1387,93 @@ function BeatRing({
         <meshBasicMaterial
           blending={THREE.AdditiveBlending}
           color={color}
-          opacity={0.08 + proximity * 0.08}
+          opacity={isFlightCue ? 0.12 + proximity * 0.1 : 0.08 + proximity * 0.08}
           transparent
         />
       </mesh>
+    </group>
+  );
+}
+
+function FlightGateway({
+  section,
+  pulse,
+}: {
+  section: LevelSection;
+  pulse: number;
+}) {
+  const palette = getSectionPalette(section.theme);
+  const startX = section.startTime * RUN_SPEED;
+  const endX = section.endTime * RUN_SPEED;
+  const length = Math.max(12, endX - startX);
+  const gateX = Math.min(endX - 4.2, startX + Math.min(6.8, length * 0.3));
+  const guideCount = Math.max(2, Math.min(5, Math.floor(length / 8.5)));
+  const guideSpacing = Math.min(9, Math.max(6.2, length / Math.max(guideCount, 1)));
+  const ringScale = 1 + pulse * 0.18 + section.intensity * 0.14;
+
+  return (
+    <group>
+      <pointLight
+        color={palette.light}
+        distance={18}
+        intensity={1.4 + pulse * 0.9}
+        position={[gateX, FLIGHT_LANE_HEIGHTS[1] + 0.1, -1.2]}
+      />
+
+      <group position={[gateX, FLIGHT_LANE_HEIGHTS[1], -1.4]} scale={[ringScale, ringScale, ringScale]}>
+        <mesh rotation={[0, Math.PI / 2, 0]}>
+          <torusGeometry args={[1.38, 0.12, 16, 36]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={palette.secondary}
+            opacity={0.42 + pulse * 0.16}
+            transparent
+          />
+        </mesh>
+        <mesh rotation={[Math.PI / 2, 0, 0]} scale={[0.76, 0.76, 0.76]}>
+          <torusGeometry args={[1.38, 0.08, 12, 32]} />
+          <meshBasicMaterial
+            blending={THREE.AdditiveBlending}
+            color={palette.markerAccent}
+            opacity={0.32 + pulse * 0.12}
+            transparent
+          />
+        </mesh>
+        <mesh scale={[0.5 + pulse * 0.12, 0.72 + pulse * 0.18, 0.5 + pulse * 0.12]}>
+          <octahedronGeometry args={[0.7, 0]} />
+          <meshStandardMaterial
+            color={palette.primary}
+            emissive={palette.secondary}
+            emissiveIntensity={1.1 + pulse * 0.6}
+            metalness={0.1}
+            roughness={0.16}
+          />
+        </mesh>
+      </group>
+
+      {Array.from({ length: guideCount }).map((_, index) => {
+        const x = gateX + 4.8 + guideSpacing * index;
+
+        if (x >= endX - 2.4) {
+          return null;
+        }
+
+        return (
+          <group key={`flight-guide-${section.startTime}-${index}`} position={[x, 0, 0]}>
+            {FLIGHT_LANE_HEIGHTS.map((laneHeight, lane) => (
+              <mesh key={`lane-${lane}`} position={[0, laneHeight, -1.7 - lane * 0.24]} scale={[0.22, 0.22, 0.22]}>
+                <sphereGeometry args={[1, 12, 12]} />
+                <meshBasicMaterial
+                  blending={THREE.AdditiveBlending}
+                  color={lane === 1 ? palette.secondary : palette.primary}
+                  opacity={0.16 + lane * 0.04 + pulse * 0.06}
+                  transparent
+                />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
     </group>
   );
 }
@@ -1504,6 +1633,10 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
 }
 
 function getSectionSpacing(kind: LevelSectionKind) {
+  if (kind === "flight") {
+    return 10;
+  }
+
   if (kind === "gauntlet") {
     return 11;
   }
@@ -2482,6 +2615,14 @@ function Track({
 
   return (
     <group ref={groupRef} position={[PLAYER_TRACK_X - snapshot.time * RUN_SPEED, 0, 0]}>
+      {visibleSections.map((section) => (
+        <group key={`section-${section.startTime}-${section.kind}`}>
+          <SectionScenery section={section} />
+          {section.kind === "flight" ? <BiolumSectionScenery section={section} /> : null}
+          {section.kind === "flight" ? <FlightGateway section={section} pulse={snapshot.audio.overall} /> : null}
+        </group>
+      ))}
+
       {lavaZones.map((zone) => (
         <LavaPool key={`${zone.startTime}-${zone.endTime}`} zone={zone} />
       ))}

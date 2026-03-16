@@ -7,6 +7,7 @@ export type GameStatus =
   | "error";
 
 export type TrackId = "downboy" | "found-da" | "default";
+export type MovementMode = "run" | "flight";
 export type LevelSectionKind =
   | "ground"
   | "climb"
@@ -14,6 +15,7 @@ export type LevelSectionKind =
   | "bridge"
   | "gauntlet"
   | "floating"
+  | "flight"
   | "tower"
   | "space"
   | "descent";
@@ -30,7 +32,7 @@ export interface BeatPoint {
   time: number;
   strength: number;
   lane: number;
-  action: "tap" | "hold" | "step" | "bridge" | "climb";
+  action: "tap" | "hold" | "step" | "bridge" | "climb" | "flight";
 }
 
 export interface Obstacle {
@@ -95,6 +97,7 @@ export interface GameSnapshot {
   playerY: number;
   playerVelocity: number;
   grounded: boolean;
+  movementMode: MovementMode;
   audio: AudioFrame;
   crashFlash: number;
   bestProgress: number;
