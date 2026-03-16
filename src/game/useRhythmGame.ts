@@ -341,6 +341,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
   const queuedJumpHoldLimitRef = useRef(MAX_HOLD_JUMP_TIME);
   const launchSequenceRef = useRef(0);
   const isLaunchingRef = useRef(false);
+  const pendingLaunchRequestedRef = useRef(false);
 
   const commitSnapshot = (audio: AudioFrame, forceUi = false) => {
     const nextSnapshot = buildSnapshot(runtimeRef.current, levelRef.current, audio);
@@ -382,6 +383,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
     launchSequenceRef.current += 1;
     isLaunchingRef.current = false;
+    pendingLaunchRequestedRef.current = false;
     setLevel(null);
     setError(null);
     setSnapshot(loadingSnapshot);
@@ -459,6 +461,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       scheduledJumpTimeRef.current = null;
       queuedJumpBoostRef.current = 1;
       queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
+      pendingLaunchRequestedRef.current = false;
       setError(null);
       commitSnapshot({
         bass: 0.12,
@@ -472,6 +475,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       }
 
       runtimeRef.current.status = "ready";
+      pendingLaunchRequestedRef.current = false;
       setError(
         caughtError instanceof Error
           ? caughtError.message
@@ -485,8 +489,27 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     }
   });
 
+  useEffect(() => {
+    if (
+      !pendingLaunchRequestedRef.current ||
+      snapshot.status !== "ready" ||
+      !level
+    ) {
+      return;
+    }
+
+    pendingLaunchRequestedRef.current = false;
+    void launchRun();
+  }, [level, launchRun, snapshot.status]);
+
   const queueJump = useEffectEvent(() => {
     const runtime = runtimeRef.current;
+
+    if (runtime.status === "loading") {
+      pendingLaunchRequestedRef.current = true;
+      void engineRef.current?.unlock();
+      return;
+    }
 
     if (runtime.status === "ready" || runtime.status === "crashed" || runtime.status === "finished") {
       void launchRun();
@@ -571,6 +594,12 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       event.preventDefault();
 
       if (event.code === "KeyR") {
+        if (runtimeRef.current.status === "loading") {
+          pendingLaunchRequestedRef.current = true;
+          void engineRef.current?.unlock();
+          return;
+        }
+
         void launchRun();
         return;
       }

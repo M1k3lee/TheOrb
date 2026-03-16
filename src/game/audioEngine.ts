@@ -113,6 +113,12 @@ export class RhythmAudioEngine {
     }
   }
 
+  async unlock() {
+    this.context = this.context ?? new AudioContext();
+    await this.context.resume();
+    this.updatePlaybackLatency();
+  }
+
   async start(offset = 0) {
     if (!this.context || !this.buffer || !this.gainNode) {
       throw new Error("Audio engine is not ready.");
