@@ -138,6 +138,7 @@ const LANE_OFFSETS = [-2.2, 0, 2.2] as const;
 const EDGE_OFFSETS = [-4.35, 4.35] as const;
 const TRACK_VIEW_AHEAD = 82;
 const TRACK_VIEW_BEHIND = 18;
+const MIN_CEILING_BEAM_BASE_Y = 4.8;
 const CUE_VIEW_AHEAD = 72;
 const CUE_VIEW_BEHIND = 12;
 const MARKER_SPACING = 2.4;
@@ -1480,7 +1481,7 @@ function FlightGateway({
 
 function Hazard({ obstacle }: { obstacle: Obstacle }) {
   if (obstacle.kind === "block") {
-    const isCeilingBeam = obstacle.baseY > 2.4 && obstacle.height <= 0.82;
+    const isCeilingBeam = obstacle.baseY >= MIN_CEILING_BEAM_BASE_Y && obstacle.height <= 0.82;
     const isMonolith = obstacle.baseY < 0.18 && obstacle.height > 2.6 && obstacle.width <= 2.2;
     const isWideSlab = obstacle.width >= 4.8 && obstacle.height <= 0.56;
     const cableHeight = Math.max(1.3, obstacle.baseY - 0.8);

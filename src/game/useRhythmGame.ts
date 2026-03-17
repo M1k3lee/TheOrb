@@ -4,6 +4,7 @@ import {
   FALL_GRAVITY_MULTIPLIER,
   FLIGHT_DRAG,
   FLIGHT_FALL_ACCELERATION,
+  FLIGHT_LANE_HEIGHTS,
   FLIGHT_MAX_SPEED,
   FLIGHT_THRUST_ACCELERATION,
   GRAVITY,
@@ -100,6 +101,67 @@ function getMovementModeForTime(level: LevelData | null, time: number): Movement
   }
 
   return "run";
+}
+
+function getSectionStartForTime(level: LevelData | null, time: number) {
+  const sections = level?.sections;
+
+  if (!sections || sections.length === 0) {
+    return 0;
+  }
+
+  let checkpointTime = 0;
+
+  for (const section of sections) {
+    if (time < section.startTime) {
+      break;
+    }
+
+    checkpointTime = section.startTime;
+
+    if (time <= section.endTime) {
+      return checkpointTime;
+    }
+  }
+
+  return checkpointTime;
+}
+
+function getFlightLaneForTime(level: LevelData | null, time: number) {
+  const beats = level?.beats;
+
+  if (!beats) {
+    return 1;
+  }
+
+  for (const beat of beats) {
+    if (beat.action !== "flight") {
+      continue;
+    }
+
+    if (beat.time >= time - 0.04) {
+      return beat.lane;
+    }
+  }
+
+  return 1;
+}
+
+function createRuntimeAtTime(previousRuntime: RuntimeState, level: LevelData, time: number): RuntimeState {
+  const movementMode = getMovementModeForTime(level, time);
+  const flightLane = getFlightLaneForTime(level, time);
+  const isFlight = movementMode === "flight";
+
+  return {
+    ...previousRuntime,
+    status: "playing",
+    time,
+    playerY: isFlight ? (FLIGHT_LANE_HEIGHTS[flightLane] ?? FLIGHT_LANE_HEIGHTS[1]) : GROUND_Y,
+    playerVelocity: 0,
+    grounded: !isFlight,
+    movementMode,
+    crashFlash: 0,
+  };
 }
 
 function createRuntimeState(status: GameStatus): RuntimeState {
@@ -520,7 +582,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     };
   }, [audioUrl, trackId]);
 
-  const launchRun = useEffectEvent(async () => {
+  const startRunAt = useEffectEvent(async (startTime: number) => {
     const engine = engineRef.current;
     const currentLevel = levelRef.current;
     const previousRuntime = runtimeRef.current;
@@ -533,26 +595,24 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     const launchSequence = ++launchSequenceRef.current;
 
     try {
-      await engine.start(0);
+      const safeStartTime = Math.max(0, Math.min(startTime, Math.max(0, currentLevel.duration - 0.3)));
+      await engine.start(safeStartTime);
 
       if (launchSequence !== launchSequenceRef.current) {
         return;
       }
 
-      runtimeRef.current = {
-        ...previousRuntime,
-        status: "playing",
-        time: 0,
-        playerY: GROUND_Y,
-        playerVelocity: 0,
-        grounded: true,
-        crashFlash: 0,
-      };
+      runtimeRef.current = createRuntimeAtTime(previousRuntime, currentLevel, safeStartTime);
       jumpBufferRef.current = 0;
       jumpHeldRef.current = false;
       jumpHoldTimeRef.current = 0;
-      coyoteTimeRef.current = COYOTE_TIME;
-      nextCueIndexRef.current = 0;
+      coyoteTimeRef.current = runtimeRef.current.grounded ? COYOTE_TIME : 0;
+      nextCueIndexRef.current = advanceCueIndex(
+        currentLevel.beats,
+        safeStartTime,
+        0,
+        currentLevel.beatInterval,
+      );
       scheduledJumpTimeRef.current = null;
       queuedJumpBoostRef.current = 1;
       queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
@@ -582,6 +642,22 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
         isLaunchingRef.current = false;
       }
     }
+  });
+
+  const launchRun = useEffectEvent(async () => {
+    await startRunAt(0);
+  });
+
+  const continueRun = useEffectEvent(async () => {
+    const currentLevel = levelRef.current;
+    const runtime = runtimeRef.current;
+
+    if (!currentLevel || (runtime.status !== "crashed" && runtime.status !== "finished")) {
+      return;
+    }
+
+    const checkpointTime = getSectionStartForTime(currentLevel, Math.max(0, runtime.time - 0.04));
+    await startRunAt(checkpointTime);
   });
 
   useEffect(() => {
@@ -689,23 +765,29 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
         event.code !== "ArrowUp" &&
         event.code !== "KeyW" &&
         event.code !== "Enter" &&
-        event.code !== "KeyR"
+        event.code !== "KeyR" &&
+        event.code !== "KeyC"
       ) {
         return;
       }
 
       event.preventDefault();
 
-      if (event.code === "KeyR") {
-        if (runtimeRef.current.status === "loading") {
-          pendingLaunchRequestedRef.current = true;
-          void engineRef.current?.unlock();
+        if (event.code === "KeyR") {
+          if (runtimeRef.current.status === "loading") {
+            pendingLaunchRequestedRef.current = true;
+            void engineRef.current?.unlock();
+            return;
+          }
+
+          void launchRun();
           return;
         }
 
-        void launchRun();
-        return;
-      }
+        if (event.code === "KeyC") {
+          void continueRun();
+          return;
+        }
 
       if (event.repeat) {
         return;
@@ -758,7 +840,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       window.removeEventListener("pointercancel", handlePointerUp);
       window.removeEventListener("blur", handlePointerUp);
     };
-  }, [launchRun, queueJump, releaseJump]);
+  }, [continueRun, launchRun, queueJump, releaseJump]);
 
   useEffect(() => {
     let animationFrame = 0;
@@ -928,6 +1010,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     error,
     startGame: launchRun,
     restartGame: launchRun,
+    continueGame: continueRun,
     queueJump,
   };
 }

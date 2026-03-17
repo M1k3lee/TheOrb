@@ -130,7 +130,7 @@ function pickTaunt(pool: readonly string[], seed: number, step: number) {
 export default function App() {
   const [selectedTrackId, setSelectedTrackId] = useState<TrackId>(TRACK_OPTIONS[0].id);
   const activeTrack = TRACK_OPTIONS.find((track) => track.id === selectedTrackId) ?? TRACK_OPTIONS[0];
-  const { level, snapshot, snapshotRef, error, startGame, restartGame } = useRhythmGame(
+  const { level, snapshot, snapshotRef, error, startGame, restartGame, continueGame } = useRhythmGame(
     activeTrack.url,
     activeTrack.id,
   );
@@ -141,6 +141,7 @@ export default function App() {
   const deferredProgress = useDeferredValue(snapshot.progress);
   const waveformBars = level?.waveform ?? [];
   const activeBar = Math.floor(deferredProgress * waveformBars.length);
+  const canContinue = snapshot.status === "crashed" && snapshot.bestProgress >= 0.08;
   const tauntTier = getTauntTier(snapshot.deaths);
   const heroTaunt = pickTaunt(
     HERO_TAUNTS[tauntTier],
@@ -172,7 +173,7 @@ export default function App() {
       : snapshot.status === "playing"
           ? "You are always moving. Jump whenever you want, but the clean line is on the cue ring. Tap short, hold longer, and climb the block stacks cleanly."
           : snapshot.status === "crashed"
-            ? `You made it ${Math.round(snapshot.progress * 100)}% through the run. Restart and clean up the next section.`
+            ? `You made it ${Math.round(snapshot.progress * 100)}% through the run. Use Continue Test to restart from the start of this section, or restart clean from zero.`
             : snapshot.status === "finished"
               ? "Full clear. Orb, obstacles, and music crossed the line together."
               : "The music could not be started cleanly. Try the launch button again.";
@@ -357,6 +358,17 @@ export default function App() {
                 type="button"
               >
                 {primaryAction.label}
+              </button>
+            ) : null}
+
+            {canContinue ? (
+              <button
+                className="button button--ghost"
+                data-ui-interactive="true"
+                onClick={() => void continueGame()}
+                type="button"
+              >
+                Continue Test
               </button>
             ) : null}
 

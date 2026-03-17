@@ -38,6 +38,7 @@ const OBSTACLE_SYNC_OFFSET_SCALE = 0.22;
 const PLAYER_COLLISION_HEIGHT = PLAYER_COLLISION_RADIUS * (0.84 + 0.72);
 const MIN_STACK_PASSAGE_HEIGHT = PLAYER_COLLISION_HEIGHT + 0.14;
 const OVERHEAD_ESCAPE_TIME = 0.11;
+const MIN_CEILING_BEAM_BASE_Y = 4.8;
 const OVERHEAD_JUMP_ASCENT =
   JUMP_VELOCITY * OVERHEAD_ESCAPE_TIME -
   0.5 * GRAVITY * HOLD_JUMP_GRAVITY_MULTIPLIER * OVERHEAD_ESCAPE_TIME * OVERHEAD_ESCAPE_TIME;
@@ -127,8 +128,8 @@ const DOWNBOY_PROFILE: TrackProfile = {
   sectionPhases: [
     {
       untilProgress: 0.2,
-      cycle: ["ground", "ground", "climb", "ground", "bridge"],
-      accentCycle: ["climb", "bridge"],
+      cycle: ["ground", "ground", "climb", "ground", "ground"],
+      accentCycle: ["climb"],
       lavaFloor: 1,
       accentEnergy: 0.72,
     },
@@ -1209,13 +1210,13 @@ function buildBridgeBar(
   useLava: boolean,
   leadBias: number,
 ) {
-  const topHeights = [1.34, 3.02, 1.28];
-  const widths = [3.9, 3.7, 4.4];
-  const thicknesses = [0.9, 0.34, 0.92];
+  const topHeights = [1.3, 2.78, 1.26];
+  const widths = [4.7, 4.4, 5.1];
+  const thicknesses = [0.94, 0.42, 1.02];
   const cues = [
     createCue(barBeats[0], "bridge", 0),
     createCue(barBeats[1], "climb", 1),
-    createCue(barBeats[2], "tap", 2),
+    createCue(barBeats[2], "step", 0),
   ];
   const platformOne = createPlatformBlock(
     barBeats[0],
@@ -1250,36 +1251,7 @@ function buildBridgeBar(
     0.52 + barEnergy * 0.16,
     leadBias,
   );
-  const platformSpike = createPlatformSpike(
-    barBeats[2],
-    barIndex * BAR_BEAT_COUNT + 102,
-    1.22,
-    0.96,
-    1,
-    0.08,
-    16,
-    0.72 + barEnergy * 0.16,
-    topHeights[1] - 0.02,
-    leadBias,
-  );
-  const overheadGate = createCeilingBeamObstacle(
-    barBeats[1],
-    barIndex * BAR_BEAT_COUNT + 152,
-    4.36,
-    0.42,
-    topHeights[1] + TARGET_OVERHEAD_PASSAGE_HEIGHT,
-    0.16,
-    228,
-    0.46 + barEnergy * 0.14,
-    leadBias,
-  );
-  const obstacles = [
-    platformOne,
-    platformTwo,
-    overheadGate,
-    exitPlatform,
-    platformSpike,
-  ];
+  const obstacles = [platformOne, platformTwo, exitPlatform];
   const lavaZone = useLava
     ? createHazardZoneForObstacles(
         [platformOne, platformTwo, exitPlatform],
@@ -1316,9 +1288,9 @@ function buildGauntletBar(
   const platformOne = createPlatformBlock(
     barBeats[0],
     barIndex * BAR_BEAT_COUNT,
-    6.2,
-    1.48,
-    1.02,
+    6.4,
+    1.42,
+    1.06,
     0.14,
     172,
     0.62 + barEnergy * 0.18,
@@ -1327,9 +1299,9 @@ function buildGauntletBar(
   const midStep = createPlatformBlock(
     barBeats[1],
     barIndex * BAR_BEAT_COUNT + 1,
-    4.8,
-    2.74,
-    0.36,
+    5.3,
+    2.46,
+    0.42,
     0.14,
     184,
     0.56 + barEnergy * 0.16,
@@ -1338,46 +1310,23 @@ function buildGauntletBar(
   const highStep = createPlatformBlock(
     barBeats[2],
     barIndex * BAR_BEAT_COUNT + 2,
-    4.1,
-    3.78,
-    0.34,
+    4.8,
+    3.26,
+    0.4,
     0.14,
     190,
     0.58 + barEnergy * 0.16,
     leadBias,
   );
-  const platformSpike = createPlatformSpike(
-    barBeats[3],
-    barIndex * BAR_BEAT_COUNT + 103,
-    1.24,
-    1.04,
-    1,
-    0.08,
-    14,
-    0.74 + barEnergy * 0.18,
-    3.76,
-    leadBias,
-  );
   const exitPlatform = createPlatformBlock(
     barBeats[4],
     barIndex * BAR_BEAT_COUNT + 4,
-    6.3,
-    1.42,
-    1.16,
+    6.5,
+    1.38,
+    1.18,
     0.14,
     196,
     0.52 + barEnergy * 0.14,
-    leadBias,
-  );
-  const chokeBeam = createCeilingBeamObstacle(
-    barBeats[1],
-    barIndex * BAR_BEAT_COUNT + 153,
-    4.08,
-    0.4,
-    2.74 + TARGET_OVERHEAD_PASSAGE_HEIGHT,
-    0.15,
-    214,
-    0.44 + barEnergy * 0.14,
     leadBias,
   );
   const lavaZone = useLava
@@ -1396,9 +1345,9 @@ function buildGauntletBar(
       createCue(barBeats[0], "step", 0),
       createCue(barBeats[1], "climb", 1),
       createCue(barBeats[2], "climb", 2),
-      createCue(barBeats[3], "tap", 1),
+      createCue(barBeats[4], "step", 0),
     ],
-    obstacles: [platformOne, midStep, chokeBeam, highStep, platformSpike, exitPlatform],
+    obstacles: [platformOne, midStep, highStep, exitPlatform],
     lavaZones: lavaZone ? [lavaZone] : [],
     cameraMoments: [
       {
@@ -1903,7 +1852,7 @@ function obstacleVerticalGap(left: Obstacle, right: Obstacle) {
 }
 
 function isCeilingBeamObstacle(obstacle: Obstacle) {
-  return obstacle.kind === "block" && obstacle.baseY > 2.4 && obstacle.height <= 0.82;
+  return obstacle.kind === "block" && obstacle.baseY >= MIN_CEILING_BEAM_BASE_Y && obstacle.height <= 0.82;
 }
 
 function isGroundedBlockObstacle(obstacle: Obstacle) {
