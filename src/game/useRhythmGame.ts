@@ -69,6 +69,11 @@ const EARLY_BEAT_SNAP_WINDOW = 0.16;
 const JUMP_SCHEDULE_TOLERANCE = 0.012;
 const CONTINUE_MIN_LEAD_TIME = 1.05;
 const CONTINUE_MAX_LEAD_TIME = 1.65;
+const CONTINUE_SEARCH_STEP = 0.05;
+const CONTINUE_RUN_SAFE_WINDOW = 0.95;
+const CONTINUE_RUN_SAFE_WINDOW_MAX = 1.35;
+const CONTINUE_FLIGHT_SAFE_WINDOW = 0.48;
+const CONTINUE_FLIGHT_SAFE_WINDOW_MAX = 0.76;
 
 function getBeatLateWindow(beatInterval: number) {
   return Math.min(BEAT_LATE_WINDOW, beatInterval * 0.24);
@@ -110,6 +115,100 @@ function getContinueLeadTime(beatInterval: number) {
   return Math.max(CONTINUE_MIN_LEAD_TIME, Math.min(CONTINUE_MAX_LEAD_TIME, beatInterval * 3.5));
 }
 
+function getContinueSafeWindow(beatInterval: number, movementMode: MovementMode) {
+  if (movementMode === "flight") {
+    return Math.max(
+      CONTINUE_FLIGHT_SAFE_WINDOW,
+      Math.min(CONTINUE_FLIGHT_SAFE_WINDOW_MAX, beatInterval * 1.55),
+    );
+  }
+
+  return Math.max(
+    CONTINUE_RUN_SAFE_WINDOW,
+    Math.min(CONTINUE_RUN_SAFE_WINDOW_MAX, beatInterval * 2.45),
+  );
+}
+
+function canResumeSafely(level: LevelData, startTime: number) {
+  const runtime = createRuntimeAtTime(createRuntimeState("playing"), level, startTime);
+  const safeUntil = Math.min(
+    level.duration,
+    startTime + getContinueSafeWindow(level.beatInterval, runtime.movementMode),
+  );
+
+  while (runtime.time + 0.0001 < safeUntil) {
+    const stepDelta = Math.min(PHYSICS_STEP, safeUntil - runtime.time);
+    const nextTime = runtime.time + stepDelta;
+    const nextMovementMode = getMovementModeForTime(level, nextTime);
+
+    if (runtime.movementMode !== nextMovementMode) {
+      runtime.movementMode = nextMovementMode;
+      runtime.playerVelocity = 0;
+
+      if (nextMovementMode === "flight") {
+        const flightLane = getFlightLaneForTime(level, nextTime);
+
+        runtime.playerY = FLIGHT_LANE_HEIGHTS[flightLane] ?? FLIGHT_LANE_HEIGHTS[1];
+        runtime.grounded = false;
+      }
+    }
+
+    const previousY = runtime.playerY;
+
+    if (runtime.movementMode === "flight") {
+      runtime.grounded = false;
+      runtime.playerVelocity -= FLIGHT_FALL_ACCELERATION * stepDelta;
+      runtime.playerVelocity *= Math.exp(-FLIGHT_DRAG * stepDelta);
+      runtime.playerVelocity = Math.max(
+        -FLIGHT_MAX_SPEED,
+        Math.min(FLIGHT_MAX_SPEED, runtime.playerVelocity),
+      );
+      runtime.playerY += runtime.playerVelocity * stepDelta;
+    } else if (!runtime.grounded) {
+      const gravity =
+        runtime.playerVelocity > 0
+          ? GRAVITY * LOW_JUMP_GRAVITY_MULTIPLIER
+          : GRAVITY * FALL_GRAVITY_MULTIPLIER;
+
+      runtime.playerVelocity -= gravity * stepDelta;
+      runtime.playerY += runtime.playerVelocity * stepDelta;
+    } else if (runtime.playerY <= GROUND_Y + 0.001) {
+      runtime.playerY = GROUND_Y;
+      runtime.playerVelocity = 0;
+    }
+
+    runtime.time = nextTime;
+
+    const collisionResult =
+      runtime.movementMode === "flight"
+        ? resolveFlightCollisions(
+            level.obstacles,
+            level.lavaZones,
+            runtime.time,
+            runtime.playerY,
+            runtime.playerVelocity,
+          )
+        : resolvePlayerCollisions(
+            level.obstacles,
+            level.lavaZones,
+            runtime.time,
+            previousY,
+            runtime.playerY,
+            runtime.playerVelocity,
+          );
+
+    if (collisionResult.crashed) {
+      return false;
+    }
+
+    runtime.playerY = collisionResult.playerY;
+    runtime.playerVelocity = collisionResult.playerVelocity;
+    runtime.grounded = collisionResult.grounded;
+  }
+
+  return true;
+}
+
 function getContinueResumeTime(level: LevelData | null, time: number) {
   const sections = level?.sections;
 
@@ -127,11 +226,22 @@ function getContinueResumeTime(level: LevelData | null, time: number) {
     checkpointTime = section.startTime;
 
     if (time <= section.endTime) {
-      return Math.max(0, checkpointTime - getContinueLeadTime(level.beatInterval));
+      break;
     }
   }
 
-  return Math.max(0, checkpointTime - getContinueLeadTime(level.beatInterval));
+  const preferredResumeTime = Math.max(0, checkpointTime - getContinueLeadTime(level.beatInterval));
+  let candidateTime = preferredResumeTime;
+
+  while (candidateTime > 0) {
+    if (canResumeSafely(level, candidateTime)) {
+      return candidateTime;
+    }
+
+    candidateTime = Math.max(0, candidateTime - CONTINUE_SEARCH_STEP);
+  }
+
+  return 0;
 }
 
 function getFlightLaneForTime(level: LevelData | null, time: number) {
@@ -822,6 +932,12 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
 
     try {
       const safeStartTime = Math.max(0, Math.min(startTime, Math.max(0, currentLevel.duration - 0.3)));
+      await engine.unlock();
+
+      if (launchSequence !== launchSequenceRef.current) {
+        return;
+      }
+
       await engine.start(safeStartTime);
 
       if (launchSequence !== launchSequenceRef.current) {

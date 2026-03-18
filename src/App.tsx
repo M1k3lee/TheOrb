@@ -335,6 +335,21 @@ export default function App() {
             ) : null}
           </div>
 
+          {snapshot.status === "loading" ? (
+            <div
+              aria-atomic="true"
+              aria-live="polite"
+              className="stage-loading-indicator"
+            >
+              <span className="stage-loading-indicator__label">Loading</span>
+              <span aria-hidden="true" className="stage-loading-indicator__dots">
+                <span />
+                <span />
+                <span />
+              </span>
+            </div>
+          ) : null}
+
           {canContinue ? (
             <div className="stage-crash-panel" data-ui-interactive="true">
               <span className="stage-crash-panel__eyebrow">Run Interrupted</span>

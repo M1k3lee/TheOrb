@@ -55,6 +55,23 @@ async function fetchAudioData(audioUrl: string) {
   }
 }
 
+async function decodeAudioBuffer(audioData: ArrayBuffer) {
+  if (typeof OfflineAudioContext !== "undefined") {
+    const decodingContext = new OfflineAudioContext(1, 1, 44_100);
+    return decodingContext.decodeAudioData(audioData);
+  }
+
+  const decodingContext = new AudioContext();
+
+  try {
+    return await decodingContext.decodeAudioData(audioData);
+  } finally {
+    if (decodingContext.state !== "closed") {
+      void decodingContext.close();
+    }
+  }
+}
+
 export class RhythmAudioEngine {
   private context: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -66,6 +83,30 @@ export class RhythmAudioEngine {
   private stoppedAt = 0;
   private startRequestId = 0;
   private playbackLatency = 0;
+
+  private ensureContext() {
+    if (this.context && this.analyser && this.gainNode && this.frequencyData) {
+      return this.context;
+    }
+
+    const context = this.context ?? new AudioContext();
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.8;
+
+    const gainNode = context.createGain();
+    gainNode.gain.value = 0.94;
+    gainNode.connect(analyser);
+    analyser.connect(context.destination);
+
+    this.context = context;
+    this.analyser = analyser;
+    this.gainNode = gainNode;
+    this.frequencyData = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
+    this.updatePlaybackLatency();
+
+    return context;
+  }
 
   private updatePlaybackLatency() {
     if (!this.context) {
@@ -83,18 +124,8 @@ export class RhythmAudioEngine {
   }
 
   async load(audioUrl: string, trackId: TrackId = "default"): Promise<LevelData> {
-    this.context = this.context ?? new AudioContext();
-    this.updatePlaybackLatency();
     const audioData = await fetchAudioData(audioUrl);
-    this.buffer = await this.context.decodeAudioData(audioData.slice(0));
-    this.analyser = this.context.createAnalyser();
-    this.analyser.fftSize = 2048;
-    this.analyser.smoothingTimeConstant = 0.8;
-    this.frequencyData = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
-    this.gainNode = this.context.createGain();
-    this.gainNode.gain.value = 0.94;
-    this.gainNode.connect(this.analyser);
-    this.analyser.connect(this.context.destination);
+    this.buffer = await decodeAudioBuffer(audioData.slice(0));
     const levelCacheKey = `${trackId}:${audioUrl}`;
     const cachedLevel = levelCache.get(levelCacheKey);
 
@@ -114,19 +145,26 @@ export class RhythmAudioEngine {
   }
 
   async unlock() {
-    this.context = this.context ?? new AudioContext();
-    await this.context.resume();
+    const context = this.ensureContext();
+    await context.resume();
     this.updatePlaybackLatency();
   }
 
   async start(offset = 0) {
-    if (!this.context || !this.buffer || !this.gainNode) {
+    if (!this.buffer) {
+      throw new Error("Audio engine is not ready.");
+    }
+
+    const context = this.ensureContext();
+    const gainNode = this.gainNode;
+
+    if (!gainNode) {
       throw new Error("Audio engine is not ready.");
     }
 
     const requestId = ++this.startRequestId;
     this.stop(false, false);
-    await this.context.resume();
+    await context.resume();
     this.updatePlaybackLatency();
 
     if (requestId !== this.startRequestId) {
@@ -135,11 +173,11 @@ export class RhythmAudioEngine {
 
     this.stop(false, false);
 
-    const nextSource = this.context.createBufferSource();
+    const nextSource = context.createBufferSource();
     nextSource.buffer = this.buffer;
-    nextSource.connect(this.gainNode);
+    nextSource.connect(gainNode);
     nextSource.start(0, offset);
-    this.startTime = this.context.currentTime - offset;
+    this.startTime = context.currentTime - offset;
     this.stoppedAt = offset;
     this.source = nextSource;
 
