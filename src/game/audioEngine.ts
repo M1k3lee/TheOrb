@@ -83,6 +83,7 @@ export class RhythmAudioEngine {
   private stoppedAt = 0;
   private startRequestId = 0;
   private playbackLatency = 0;
+  private isPrimed = false;
 
   private ensureContext() {
     if (this.context && this.analyser && this.gainNode && this.frequencyData) {
@@ -123,6 +124,18 @@ export class RhythmAudioEngine {
     this.playbackLatency = Math.min(0.18, Math.max(0, baseLatency + outputLatency));
   }
 
+  private async resumeContext(context: AudioContext) {
+    if (context.state !== "running") {
+      await context.resume();
+    }
+
+    if (context.state !== "running") {
+      throw new Error("Audio playback is blocked.");
+    }
+
+    this.updatePlaybackLatency();
+  }
+
   async load(audioUrl: string, trackId: TrackId = "default"): Promise<LevelData> {
     const audioData = await fetchAudioData(audioUrl);
     this.buffer = await decodeAudioBuffer(audioData.slice(0));
@@ -146,8 +159,21 @@ export class RhythmAudioEngine {
 
   async unlock() {
     const context = this.ensureContext();
-    await context.resume();
-    this.updatePlaybackLatency();
+    await this.resumeContext(context);
+
+    if (this.isPrimed) {
+      return;
+    }
+
+    const silentSource = context.createBufferSource();
+    const silentBuffer = context.createBuffer(1, 1, context.sampleRate);
+    silentSource.buffer = silentBuffer;
+    silentSource.connect(this.gainNode ?? context.destination);
+    silentSource.onended = () => {
+      silentSource.disconnect();
+    };
+    silentSource.start(0);
+    this.isPrimed = true;
   }
 
   async start(offset = 0) {
@@ -164,8 +190,7 @@ export class RhythmAudioEngine {
 
     const requestId = ++this.startRequestId;
     this.stop(false, false);
-    await context.resume();
-    this.updatePlaybackLatency();
+    await this.unlock();
 
     if (requestId !== this.startRequestId) {
       return;
@@ -270,5 +295,6 @@ export class RhythmAudioEngine {
     this.context = null;
     this.analyser = null;
     this.gainNode = null;
+    this.isPrimed = false;
   }
 }

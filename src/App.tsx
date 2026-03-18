@@ -14,6 +14,21 @@ type FullscreenDocument = Document & {
   webkitFullscreenElement?: Element | null;
 };
 
+type LockableScreenOrientation = ScreenOrientation & {
+  lock?: (orientation: "landscape") => Promise<void>;
+  unlock?: () => void;
+};
+
+type OrientationCapableScreen = Screen & {
+  orientation?: LockableScreenOrientation;
+  lockOrientation?: (orientation: "landscape") => boolean;
+  mozLockOrientation?: (orientation: "landscape") => boolean;
+  msLockOrientation?: (orientation: "landscape") => boolean;
+  unlockOrientation?: () => void;
+  mozUnlockOrientation?: () => void;
+  msUnlockOrientation?: () => void;
+};
+
 function isFullscreenTarget(element: HTMLElement | null) {
   const fullscreenDocument = document as FullscreenDocument;
 
@@ -29,6 +44,36 @@ function formatTime(totalSeconds: number) {
   const seconds = safeSeconds % 60;
 
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function shouldAutoRotateForFullscreen() {
+  return typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+}
+
+async function lockLandscapeOrientation() {
+  const orientationScreen = window.screen as OrientationCapableScreen;
+
+  try {
+    if (orientationScreen.orientation?.lock) {
+      await orientationScreen.orientation.lock("landscape");
+      return;
+    }
+  } catch {
+    // Best effort only. Some browsers reject when fullscreen/orientation lock is unsupported.
+  }
+
+  orientationScreen.lockOrientation?.("landscape");
+  orientationScreen.mozLockOrientation?.("landscape");
+  orientationScreen.msLockOrientation?.("landscape");
+}
+
+function unlockLandscapeOrientation() {
+  const orientationScreen = window.screen as OrientationCapableScreen;
+
+  orientationScreen.orientation?.unlock?.();
+  orientationScreen.unlockOrientation?.();
+  orientationScreen.mozUnlockOrientation?.();
+  orientationScreen.msUnlockOrientation?.();
 }
 
 const TRACK_OPTIONS = [
@@ -138,10 +183,12 @@ export default function App() {
   const tauntSeedRef = useRef(Math.floor(Math.random() * 10_000));
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
+  const requiresExplicitStart = shouldAutoRotateForFullscreen();
   const deferredProgress = useDeferredValue(snapshot.progress);
   const waveformBars = level?.waveform ?? [];
   const activeBar = Math.floor(deferredProgress * waveformBars.length);
   const canContinue = snapshot.status === "crashed";
+  const showStartOverlay = requiresExplicitStart && snapshot.status === "ready";
   const tauntTier = getTauntTier(snapshot.deaths);
   const heroTaunt = pickTaunt(
     HERO_TAUNTS[tauntTier],
@@ -210,7 +257,14 @@ export default function App() {
     stopStageControlInteraction(event);
     void restartGame();
   };
-  const handleFullscreenToggle = () => {
+  const handleStageStart = (event: {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  }) => {
+    stopStageControlInteraction(event);
+    void startGame();
+  };
+  const handleFullscreenToggle = async () => {
     const stage = stageRef.current as FullscreenStageElement | null;
     const fullscreenDocument = document as FullscreenDocument;
 
@@ -220,18 +274,24 @@ export default function App() {
 
     if (isFullscreenTarget(stage)) {
       if (document.fullscreenElement) {
-        void document.exitFullscreen();
+        await document.exitFullscreen();
       } else {
-        void fullscreenDocument.webkitExitFullscreen?.();
+        await fullscreenDocument.webkitExitFullscreen?.();
       }
+
+      unlockLandscapeOrientation();
 
       return;
     }
 
     if (stage.requestFullscreen) {
-      void stage.requestFullscreen();
+      await stage.requestFullscreen();
     } else {
-      void stage.webkitRequestFullscreen?.();
+      await stage.webkitRequestFullscreen?.();
+    }
+
+    if (shouldAutoRotateForFullscreen()) {
+      await lockLandscapeOrientation();
     }
   };
 
@@ -245,7 +305,19 @@ export default function App() {
     );
 
     const handleFullscreenChange = () => {
-      setIsFullscreen(isFullscreenTarget(stageRef.current));
+      const fullscreenActive = isFullscreenTarget(stageRef.current);
+
+      setIsFullscreen(fullscreenActive);
+
+      if (fullscreenActive) {
+        if (shouldAutoRotateForFullscreen()) {
+          void lockLandscapeOrientation();
+        }
+
+        return;
+      }
+
+      unlockLandscapeOrientation();
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -347,6 +419,22 @@ export default function App() {
                 <span />
                 <span />
               </span>
+            </div>
+          ) : null}
+
+          {showStartOverlay ? (
+            <div className="stage-start-panel" data-ui-interactive="true">
+              <span className="stage-start-panel__eyebrow">Track Ready</span>
+              <h2>Start</h2>
+              <p>Tap start to begin the run on mobile.</p>
+              <button
+                className="button button--primary"
+                data-ui-interactive="true"
+                onPointerDown={handleStageStart}
+                type="button"
+              >
+                Start
+              </button>
             </div>
           ) : null}
 
