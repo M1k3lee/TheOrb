@@ -206,6 +206,59 @@ select {
   pointer-events: none;
 }
 
+.stage-crash-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  width: min(520px, calc(100% - 28px));
+  padding: clamp(1rem, 2vw, 1.35rem);
+  border: 1px solid rgba(150, 231, 224, 0.2);
+  border-radius: 26px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(7, 19, 28, 0.8)),
+    rgba(5, 14, 22, 0.82);
+  backdrop-filter: blur(22px);
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  pointer-events: auto;
+  text-align: center;
+  transform: translate(-50%, -18%);
+}
+
+.stage-crash-panel__eyebrow {
+  display: inline-block;
+  margin-bottom: 0.45rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(160, 238, 231, 0.78);
+}
+
+.stage-crash-panel h2 {
+  margin: 0;
+  font-family: "Space Grotesk", "Sora", sans-serif;
+  font-size: clamp(1.45rem, 2.2vw, 2rem);
+  letter-spacing: -0.04em;
+  color: #f7fffe;
+}
+
+.stage-crash-panel p {
+  margin: 0.7rem auto 0;
+  max-width: 34ch;
+  color: rgba(227, 246, 248, 0.82);
+  line-height: 1.5;
+}
+
+.stage-crash-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
 .progress-panel {
   width: min(540px, 100%);
   padding: 0.95rem 1.1rem;
@@ -538,6 +591,11 @@ select {
     border-radius: 24px;
   }
 
+  .stage-crash-panel {
+    width: min(480px, calc(100% - 24px));
+    transform: translate(-50%, -12%);
+  }
+
   .stage-overlay {
     padding: 12px;
   }
@@ -559,6 +617,10 @@ select {
   .button,
   .track-picker__select {
     min-height: 46px;
+  }
+
+  .stage-crash-actions .button {
+    width: 100%;
   }
 
   .fullscreen-exit-button {
@@ -626,6 +688,17 @@ select {
   .game-stage {
     min-height: clamp(300px, 48dvh, 420px);
     border-radius: 20px;
+  }
+
+  .stage-crash-panel {
+    width: min(100%, calc(100% - 20px));
+    padding: 0.95rem;
+    transform: translate(-50%, -8%);
+  }
+
+  .stage-crash-panel p {
+    font-size: 0.9rem;
+    line-height: 1.4;
   }
 
   .overlay-footer {

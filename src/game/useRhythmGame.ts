@@ -14,6 +14,7 @@ import {
   JUMP_VELOCITY,
   LOW_JUMP_GRAVITY_MULTIPLIER,
   MAX_HOLD_JUMP_TIME,
+  PHYSICS_STEP,
   PLAYER_COLLISION_RADIUS,
   RUN_SPEED,
 } from "./constants";
@@ -66,6 +67,8 @@ const GOOD_HOLD_LIMIT = 0.15;
 const LAVA_SURFACE_Y = 0.22;
 const EARLY_BEAT_SNAP_WINDOW = 0.16;
 const JUMP_SCHEDULE_TOLERANCE = 0.012;
+const CONTINUE_MIN_LEAD_TIME = 1.05;
+const CONTINUE_MAX_LEAD_TIME = 1.65;
 
 function getBeatLateWindow(beatInterval: number) {
   return Math.min(BEAT_LATE_WINDOW, beatInterval * 0.24);
@@ -103,7 +106,11 @@ function getMovementModeForTime(level: LevelData | null, time: number): Movement
   return "run";
 }
 
-function getSectionStartForTime(level: LevelData | null, time: number) {
+function getContinueLeadTime(beatInterval: number) {
+  return Math.max(CONTINUE_MIN_LEAD_TIME, Math.min(CONTINUE_MAX_LEAD_TIME, beatInterval * 3.5));
+}
+
+function getContinueResumeTime(level: LevelData | null, time: number) {
   const sections = level?.sections;
 
   if (!sections || sections.length === 0) {
@@ -120,11 +127,11 @@ function getSectionStartForTime(level: LevelData | null, time: number) {
     checkpointTime = section.startTime;
 
     if (time <= section.endTime) {
-      return checkpointTime;
+      return Math.max(0, checkpointTime - getContinueLeadTime(level.beatInterval));
     }
   }
 
-  return checkpointTime;
+  return Math.max(0, checkpointTime - getContinueLeadTime(level.beatInterval));
 }
 
 function getFlightLaneForTime(level: LevelData | null, time: number) {
@@ -476,6 +483,82 @@ function applyQueuedJumpTiming(
   queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
 }
 
+function clearQueuedJumpState(
+  jumpBufferRef: MutableRefObject<number>,
+  scheduledJumpTimeRef: MutableRefObject<number | null>,
+  queuedJumpBoostRef: MutableRefObject<number>,
+  queuedJumpHoldLimitRef: MutableRefObject<number>,
+) {
+  jumpBufferRef.current = 0;
+  scheduledJumpTimeRef.current = null;
+  queuedJumpBoostRef.current = 1;
+  queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
+}
+
+function resetMovementModeState(
+  runtime: RuntimeState,
+  nextMovementMode: MovementMode,
+  jumpBufferRef: MutableRefObject<number>,
+  jumpHoldTimeRef: MutableRefObject<number>,
+  coyoteTimeRef: MutableRefObject<number>,
+  scheduledJumpTimeRef: MutableRefObject<number | null>,
+  queuedJumpBoostRef: MutableRefObject<number>,
+  queuedJumpHoldLimitRef: MutableRefObject<number>,
+) {
+  if (runtime.movementMode === nextMovementMode) {
+    return;
+  }
+
+  runtime.movementMode = nextMovementMode;
+  clearQueuedJumpState(
+    jumpBufferRef,
+    scheduledJumpTimeRef,
+    queuedJumpBoostRef,
+    queuedJumpHoldLimitRef,
+  );
+  jumpHoldTimeRef.current = 0;
+  coyoteTimeRef.current = 0;
+
+  if (nextMovementMode === "flight") {
+    runtime.grounded = false;
+    runtime.playerVelocity = 0;
+  }
+}
+
+function tryConsumeQueuedJump(
+  runtime: RuntimeState,
+  jumpBufferRef: MutableRefObject<number>,
+  jumpHoldTimeRef: MutableRefObject<number>,
+  coyoteTimeRef: MutableRefObject<number>,
+  scheduledJumpTimeRef: MutableRefObject<number | null>,
+  queuedJumpBoostRef: MutableRefObject<number>,
+  queuedJumpHoldLimitRef: MutableRefObject<number>,
+) {
+  const dueScheduledJump =
+    scheduledJumpTimeRef.current !== null &&
+    runtime.time + JUMP_SCHEDULE_TOLERANCE >= scheduledJumpTimeRef.current;
+  const shouldJump =
+    runtime.movementMode === "run" &&
+    (runtime.grounded || coyoteTimeRef.current > 0) &&
+    jumpBufferRef.current > 0 &&
+    (scheduledJumpTimeRef.current === null || dueScheduledJump);
+
+  if (!shouldJump) {
+    return false;
+  }
+
+  runtime.grounded = false;
+  runtime.playerVelocity = JUMP_VELOCITY * queuedJumpBoostRef.current;
+  jumpBufferRef.current = 0;
+  scheduledJumpTimeRef.current = null;
+  jumpHoldTimeRef.current = queuedJumpHoldLimitRef.current;
+  coyoteTimeRef.current = 0;
+  queuedJumpBoostRef.current = 1;
+  queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
+
+  return true;
+}
+
 export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
   const initialRuntime = createRuntimeState("loading");
   const initialSnapshot = buildSnapshot(initialRuntime, null, IDLE_AUDIO);
@@ -522,6 +605,149 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     uiSnapshotRef.current = nextSnapshot;
     lastUiCommitRef.current = now;
     setSnapshot(nextSnapshot);
+  };
+
+  const syncRuntimeToAudioTime = (
+    currentLevel: LevelData,
+    targetTime: number,
+    engine: RhythmAudioEngine | null,
+  ) => {
+    const runtime = runtimeRef.current;
+    const clampedTargetTime = Math.max(runtime.time, Math.min(targetTime, currentLevel.duration));
+
+    while (runtime.status === "playing" && runtime.time + 0.0001 < clampedTargetTime) {
+      const stepDelta = Math.min(PHYSICS_STEP, clampedTargetTime - runtime.time);
+      const nextTime = runtime.time + stepDelta;
+
+      resetMovementModeState(
+        runtime,
+        getMovementModeForTime(currentLevel, nextTime),
+        jumpBufferRef,
+        jumpHoldTimeRef,
+        coyoteTimeRef,
+        scheduledJumpTimeRef,
+        queuedJumpBoostRef,
+        queuedJumpHoldLimitRef,
+      );
+
+      runtime.crashFlash = Math.max(0, runtime.crashFlash - stepDelta * 1.3);
+      jumpBufferRef.current = Math.max(0, jumpBufferRef.current - stepDelta);
+      nextCueIndexRef.current = advanceCueIndex(
+        currentLevel.beats,
+        nextTime,
+        nextCueIndexRef.current,
+        currentLevel.beatInterval,
+      );
+      coyoteTimeRef.current = runtime.grounded
+        ? COYOTE_TIME
+        : Math.max(0, coyoteTimeRef.current - stepDelta);
+
+      tryConsumeQueuedJump(
+        runtime,
+        jumpBufferRef,
+        jumpHoldTimeRef,
+        coyoteTimeRef,
+        scheduledJumpTimeRef,
+        queuedJumpBoostRef,
+        queuedJumpHoldLimitRef,
+      );
+
+      const previousY = runtime.playerY;
+
+      if (runtime.movementMode === "flight") {
+        runtime.grounded = false;
+
+        const acceleration = jumpHeldRef.current
+          ? FLIGHT_THRUST_ACCELERATION
+          : -FLIGHT_FALL_ACCELERATION;
+
+        runtime.playerVelocity += acceleration * stepDelta;
+        runtime.playerVelocity *= Math.exp(-FLIGHT_DRAG * stepDelta);
+        runtime.playerVelocity = Math.max(
+          -FLIGHT_MAX_SPEED,
+          Math.min(FLIGHT_MAX_SPEED, runtime.playerVelocity),
+        );
+        runtime.playerY += runtime.playerVelocity * stepDelta;
+      } else if (!runtime.grounded) {
+        let gravity = GRAVITY;
+
+        if (runtime.playerVelocity > 0) {
+          if (jumpHeldRef.current && jumpHoldTimeRef.current > 0) {
+            gravity *= HOLD_JUMP_GRAVITY_MULTIPLIER;
+            jumpHoldTimeRef.current = Math.max(0, jumpHoldTimeRef.current - stepDelta);
+          } else {
+            gravity *= LOW_JUMP_GRAVITY_MULTIPLIER;
+          }
+        } else {
+          gravity *= FALL_GRAVITY_MULTIPLIER;
+        }
+
+        runtime.playerVelocity -= gravity * stepDelta;
+        runtime.playerY += runtime.playerVelocity * stepDelta;
+      } else if (runtime.playerY <= GROUND_Y + 0.001) {
+        runtime.playerY = GROUND_Y;
+        runtime.playerVelocity = 0;
+        jumpHoldTimeRef.current = 0;
+      }
+
+      runtime.time = nextTime;
+
+      const collisionResult =
+        runtime.movementMode === "flight"
+          ? resolveFlightCollisions(
+              currentLevel.obstacles,
+              currentLevel.lavaZones,
+              runtime.time,
+              runtime.playerY,
+              runtime.playerVelocity,
+            )
+          : resolvePlayerCollisions(
+              currentLevel.obstacles,
+              currentLevel.lavaZones,
+              runtime.time,
+              previousY,
+              runtime.playerY,
+              runtime.playerVelocity,
+            );
+
+      runtime.playerY = collisionResult.playerY;
+      runtime.playerVelocity = collisionResult.playerVelocity;
+      runtime.grounded = collisionResult.grounded;
+
+      if (runtime.grounded) {
+        jumpHoldTimeRef.current = 0;
+        coyoteTimeRef.current = COYOTE_TIME;
+      }
+
+      runtime.bestProgress = Math.max(runtime.bestProgress, runtime.time / currentLevel.duration);
+
+      if (collisionResult.crashed) {
+        runtime.status = "crashed";
+        runtime.crashFlash = 1;
+        runtime.deaths += 1;
+        clearQueuedJumpState(
+          jumpBufferRef,
+          scheduledJumpTimeRef,
+          queuedJumpBoostRef,
+          queuedJumpHoldLimitRef,
+        );
+        engine?.stop();
+        break;
+      }
+
+      if (runtime.time >= currentLevel.duration - 0.08) {
+        runtime.status = "finished";
+        runtime.time = currentLevel.duration;
+        clearQueuedJumpState(
+          jumpBufferRef,
+          scheduledJumpTimeRef,
+          queuedJumpBoostRef,
+          queuedJumpHoldLimitRef,
+        );
+        engine?.stop();
+        break;
+      }
+    }
   };
 
   useEffect(() => {
@@ -656,7 +882,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       return;
     }
 
-    const checkpointTime = getSectionStartForTime(currentLevel, Math.max(0, runtime.time - 0.04));
+    const checkpointTime = getContinueResumeTime(currentLevel, Math.max(0, runtime.time - 0.04));
     await startRunAt(checkpointTime);
   });
 
@@ -682,14 +908,6 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       return;
     }
 
-    if (runtime.status === "playing" && runtime.movementMode === "flight") {
-      scheduledJumpTimeRef.current = null;
-      jumpBufferRef.current = 0;
-      queuedJumpBoostRef.current = 1;
-      queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
-      return;
-    }
-
     if (runtime.status === "ready" || runtime.status === "crashed" || runtime.status === "finished") {
       void launchRun();
       return;
@@ -700,21 +918,46 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     }
 
     const currentLevel = levelRef.current;
+    const engine = engineRef.current;
 
     if (!currentLevel) {
       return;
     }
 
+    if (engine) {
+      syncRuntimeToAudioTime(currentLevel, engine.getCurrentTime(), engine);
+    }
+
+    const liveRuntime = runtimeRef.current;
+
+    if (liveRuntime.status !== "playing") {
+      if (engine) {
+        commitSnapshot(engine.sampleLevels());
+      }
+
+      return;
+    }
+
+    if (liveRuntime.movementMode === "flight") {
+      clearQueuedJumpState(
+        jumpBufferRef,
+        scheduledJumpTimeRef,
+        queuedJumpBoostRef,
+        queuedJumpHoldLimitRef,
+      );
+      return;
+    }
+
     const cueIndex = advanceCueIndex(
       currentLevel.beats,
-      runtime.time,
+      liveRuntime.time,
       nextCueIndexRef.current,
       currentLevel.beatInterval,
     );
     nextCueIndexRef.current = cueIndex;
     const nearestCue = findNearestCue(
       currentLevel.beats,
-      runtime.time,
+      liveRuntime.time,
       cueIndex,
       currentLevel.beatInterval,
     );
@@ -722,12 +965,14 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
     const beatError = Math.abs(nearestCue?.delta ?? Number.POSITIVE_INFINITY);
     const earlyBeatSnapWindow = getEarlyBeatSnapWindow(currentLevel.beatInterval);
 
+    let queuedEarlySnap = false;
+
     if (
-      (runtime.grounded || coyoteTimeRef.current > 0) &&
+      (liveRuntime.grounded || coyoteTimeRef.current > 0) &&
       upcomingCue &&
-      upcomingCue.time >= runtime.time
+      upcomingCue.time >= liveRuntime.time
     ) {
-      const earlyDelta = upcomingCue.time - runtime.time;
+      const earlyDelta = upcomingCue.time - liveRuntime.time;
 
       if (earlyDelta <= earlyBeatSnapWindow) {
         scheduledJumpTimeRef.current = upcomingCue.time;
@@ -739,19 +984,35 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
           queuedJumpHoldLimitRef,
         );
         jumpBufferRef.current = Math.max(JUMP_BUFFER_TIME, earlyDelta + JUMP_SCHEDULE_TOLERANCE);
-        return;
+        queuedEarlySnap = true;
       }
     }
 
-    scheduledJumpTimeRef.current = null;
-    applyQueuedJumpTiming(
-      nearestCue?.cue.action,
-      beatError,
-      currentLevel.beatInterval,
+    if (!queuedEarlySnap) {
+      scheduledJumpTimeRef.current = null;
+      applyQueuedJumpTiming(
+        nearestCue?.cue.action,
+        beatError,
+        currentLevel.beatInterval,
+        queuedJumpBoostRef,
+        queuedJumpHoldLimitRef,
+      );
+      jumpBufferRef.current = JUMP_BUFFER_TIME;
+    }
+
+    tryConsumeQueuedJump(
+      liveRuntime,
+      jumpBufferRef,
+      jumpHoldTimeRef,
+      coyoteTimeRef,
+      scheduledJumpTimeRef,
       queuedJumpBoostRef,
       queuedJumpHoldLimitRef,
     );
-    jumpBufferRef.current = JUMP_BUFFER_TIME;
+
+    if (engine) {
+      commitSnapshot(engine.sampleLevels());
+    }
   });
 
   const releaseJump = useEffectEvent(() => {
@@ -854,139 +1115,7 @@ export function useRhythmGame(audioUrl: string, trackId: TrackId = "default") {
       previousFrame = now;
 
       if (runtime.status === "playing" && engine && currentLevel) {
-        runtime.time = engine.getCurrentTime();
-        const movementMode = getMovementModeForTime(currentLevel, runtime.time);
-        const modeChanged = runtime.movementMode !== movementMode;
-
-        if (modeChanged) {
-          runtime.movementMode = movementMode;
-          jumpBufferRef.current = 0;
-          scheduledJumpTimeRef.current = null;
-          queuedJumpBoostRef.current = 1;
-          queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
-          jumpHoldTimeRef.current = 0;
-          coyoteTimeRef.current = 0;
-
-          if (movementMode === "flight") {
-            runtime.grounded = false;
-            runtime.playerVelocity = 0;
-          }
-        }
-
-        runtime.crashFlash = Math.max(0, runtime.crashFlash - delta * 1.3);
-        jumpBufferRef.current = Math.max(0, jumpBufferRef.current - delta);
-        nextCueIndexRef.current = advanceCueIndex(
-          currentLevel.beats,
-          runtime.time,
-          nextCueIndexRef.current,
-          currentLevel.beatInterval,
-        );
-        coyoteTimeRef.current = runtime.grounded
-          ? COYOTE_TIME
-          : Math.max(0, coyoteTimeRef.current - delta);
-        const previousY = runtime.playerY;
-        const dueScheduledJump =
-          scheduledJumpTimeRef.current !== null &&
-          runtime.time + JUMP_SCHEDULE_TOLERANCE >= scheduledJumpTimeRef.current;
-        const shouldJump =
-          runtime.movementMode === "run" &&
-          (runtime.grounded || coyoteTimeRef.current > 0) &&
-          jumpBufferRef.current > 0 &&
-          (scheduledJumpTimeRef.current === null || dueScheduledJump);
-
-        if (shouldJump) {
-          runtime.grounded = false;
-          runtime.playerVelocity = JUMP_VELOCITY * queuedJumpBoostRef.current;
-          jumpBufferRef.current = 0;
-          scheduledJumpTimeRef.current = null;
-          jumpHoldTimeRef.current = queuedJumpHoldLimitRef.current;
-          coyoteTimeRef.current = 0;
-          queuedJumpBoostRef.current = 1;
-          queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
-        }
-
-        if (runtime.movementMode === "flight") {
-          runtime.grounded = false;
-
-          const acceleration = jumpHeldRef.current
-            ? FLIGHT_THRUST_ACCELERATION
-            : -FLIGHT_FALL_ACCELERATION;
-
-          runtime.playerVelocity += acceleration * delta;
-          runtime.playerVelocity *= Math.exp(-FLIGHT_DRAG * delta);
-          runtime.playerVelocity = Math.max(
-            -FLIGHT_MAX_SPEED,
-            Math.min(FLIGHT_MAX_SPEED, runtime.playerVelocity),
-          );
-          runtime.playerY += runtime.playerVelocity * delta;
-        } else if (!runtime.grounded) {
-          let gravity = GRAVITY;
-
-          if (runtime.playerVelocity > 0) {
-            if (jumpHeldRef.current && jumpHoldTimeRef.current > 0) {
-              gravity *= HOLD_JUMP_GRAVITY_MULTIPLIER;
-              jumpHoldTimeRef.current = Math.max(0, jumpHoldTimeRef.current - delta);
-            } else {
-              gravity *= LOW_JUMP_GRAVITY_MULTIPLIER;
-            }
-          } else {
-            gravity *= FALL_GRAVITY_MULTIPLIER;
-          }
-
-          runtime.playerVelocity -= gravity * delta;
-          runtime.playerY += runtime.playerVelocity * delta;
-        } else if (runtime.playerY <= GROUND_Y + 0.001) {
-          runtime.playerY = GROUND_Y;
-          runtime.playerVelocity = 0;
-          jumpHoldTimeRef.current = 0;
-        }
-
-        const collisionResult =
-          runtime.movementMode === "flight"
-            ? resolveFlightCollisions(
-                currentLevel.obstacles,
-                currentLevel.lavaZones,
-                runtime.time,
-                runtime.playerY,
-                runtime.playerVelocity,
-              )
-            : resolvePlayerCollisions(
-                currentLevel.obstacles,
-                currentLevel.lavaZones,
-                runtime.time,
-                previousY,
-                runtime.playerY,
-                runtime.playerVelocity,
-              );
-
-        runtime.playerY = collisionResult.playerY;
-        runtime.playerVelocity = collisionResult.playerVelocity;
-        runtime.grounded = collisionResult.grounded;
-
-        if (runtime.grounded) {
-          jumpHoldTimeRef.current = 0;
-          coyoteTimeRef.current = COYOTE_TIME;
-        }
-
-        runtime.bestProgress = Math.max(runtime.bestProgress, runtime.time / currentLevel.duration);
-
-        if (collisionResult.crashed) {
-          runtime.status = "crashed";
-          runtime.crashFlash = 1;
-          runtime.deaths += 1;
-          scheduledJumpTimeRef.current = null;
-          queuedJumpBoostRef.current = 1;
-          queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
-          engine.stop();
-        } else if (runtime.time >= currentLevel.duration - 0.08) {
-          runtime.status = "finished";
-          runtime.time = currentLevel.duration;
-          scheduledJumpTimeRef.current = null;
-          queuedJumpBoostRef.current = 1;
-          queuedJumpHoldLimitRef.current = MAX_HOLD_JUMP_TIME;
-          engine.stop();
-        }
-
+        syncRuntimeToAudioTime(currentLevel, engine.getCurrentTime(), engine);
         commitSnapshot(engine.sampleLevels());
       } else {
         runtime.crashFlash = Math.max(0, runtime.crashFlash - delta * 1.1);

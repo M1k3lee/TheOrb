@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
-import { useRef, type MutableRefObject } from "react";
+import { memo, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import {
   FLIGHT_LANE_HEIGHTS,
@@ -80,22 +80,33 @@ const BACKDROP_FRAGMENT_SHADER = `
       atan(direction.z, direction.x) / 6.28318530718 + 0.5,
       direction.y * 0.5 + 0.5
     );
-    float time = uTime * 0.01;
-    float nebula = fbm(sphereUv * vec2(3.2, 2.0) + vec2(time * 0.06, -time * 0.03));
-    float softBand = smoothstep(0.58, 0.9, nebula + direction.y * 0.08);
-    float starNoise = hash(floor(sphereUv * vec2(280.0, 180.0)));
-    float stars = smoothstep(0.9968, 1.0, starNoise) * (0.55 + uIntensity * 0.08);
-    float brightNoise = hash(floor(sphereUv * vec2(120.0, 74.0)) + 13.0);
-    float brightStars = smoothstep(0.9986, 1.0, brightNoise) * (0.35 + uTreble * 0.08);
-    float glow = smoothstep(0.72, 0.95, nebula) * 0.06;
+    float time = uTime * 0.08;
+    vec2 flowUv = vec2(sphereUv.x * 2.4 + time * 0.05, sphereUv.y * 3.6 - time * 0.08);
+    float warpA = fbm(flowUv + vec2(0.0, time * 0.12));
+    float warpB = fbm(flowUv * 0.65 - vec2(time * 0.08, -time * 0.05));
+    float curtainA = sin(sphereUv.x * 8.2 + warpA * 3.1 - time * 1.2) * 0.12;
+    float curtainB = sin(sphereUv.x * 5.4 - warpB * 2.7 + time * 0.8) * 0.09;
+    float curtainC = sin(sphereUv.x * 11.0 + warpA * 1.8 - time * 1.7) * 0.05;
+    float bandA = smoothstep(0.28, 0.985, 1.0 - abs(sphereUv.y - 0.7 - curtainA - curtainC));
+    float bandB = smoothstep(0.34, 0.992, 1.0 - abs(sphereUv.y - 0.57 - curtainB));
+    float bandC = smoothstep(0.42, 0.996, 1.0 - abs(sphereUv.y - 0.82 - curtainA * 0.45 + curtainB * 0.25));
+    float lowerFade = smoothstep(0.02, 0.18, sphereUv.y);
+    float upperFade = 1.0 - smoothstep(0.9, 1.02, sphereUv.y);
+    float horizonGlow = smoothstep(0.0, 0.26, sphereUv.y) * (1.0 - smoothstep(0.34, 0.62, sphereUv.y));
+    float skyGradient = pow(smoothstep(0.0, 1.0, sphereUv.y), 0.82);
+    float aurora = (bandA * 0.7 + bandB * 0.5 + bandC * 0.28) * (0.45 + warpA * 0.35 + warpB * 0.2);
+    aurora *= lowerFade * upperFade;
 
-    vec3 base = mix(vec3(0.005, 0.008, 0.02), uDeep * 0.18, 0.45);
-    vec3 color = base;
-    color += softBand * mix(uPrimary, uSecondary, 0.35) * 0.025;
-    color += glow * mix(uSecondary, vec3(0.65, 0.82, 1.0), 0.25);
-    color += stars * vec3(0.82, 0.9, 1.0) * 0.9;
-    color += brightStars * vec3(1.0, 0.98, 0.95);
-    color = mix(color, color + vec3(0.12, 0.16, 0.22), uCrash * 0.06);
+    vec3 zenith = mix(vec3(0.0, 0.01, 0.045), uDeep * 0.14 + vec3(0.0, 0.005, 0.025), 0.26);
+    vec3 horizon = mix(vec3(0.0, 0.08, 0.11), mix(uPrimary, uSecondary, 0.3) * 0.18 + vec3(0.0, 0.03, 0.05), 0.32);
+    vec3 auroraColorA = mix(vec3(0.12, 0.95, 0.82), uPrimary, 0.42);
+    vec3 auroraColorB = mix(vec3(0.18, 0.62, 1.0), uSecondary, 0.48);
+    vec3 color = mix(horizon, zenith, skyGradient);
+    color += (1.0 - skyGradient) * mix(vec3(0.0, 0.08, 0.1), auroraColorA * 0.28, 0.45) * 0.24;
+    color += horizonGlow * mix(auroraColorA, auroraColorB, 0.35) * 0.08;
+    color += aurora * mix(auroraColorA, auroraColorB, clamp(warpB + sphereUv.x * 0.2 + sphereUv.y * 0.18, 0.0, 1.0)) * (0.24 + uIntensity * 0.12 + uBass * 0.05 + uMid * 0.05 + uTreble * 0.03);
+    color += smoothstep(0.36, 0.92, aurora) * vec3(0.14, 0.24, 0.34) * (0.11 + uMid * 0.05);
+    color = mix(color, color + vec3(0.08, 0.12, 0.2), uCrash * 0.05);
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -145,6 +156,8 @@ const MARKER_SPACING = 2.4;
 const PYLON_SPACING = 9.6;
 const TRAIL_COUNT = 5;
 const SECTION_VIEW_PADDING = 1.1;
+const MAX_SECTION_OFFSET_COUNT = 7;
+const SCENE_DECOR_ENABLED = false;
 
 interface ThemePalette {
   deep: string;
@@ -531,7 +544,7 @@ function splitTrackSegmentsBySections(
 }
 
 function createSectionOffsets(length: number, spacing: number) {
-  const count = Math.max(1, Math.min(9, Math.round(length / Math.max(6, spacing))));
+  const count = Math.max(1, Math.min(MAX_SECTION_OFFSET_COUNT, Math.round(length / Math.max(7, spacing))));
   const step = length / count;
 
   return Array.from({ length: count }, (_, index) => -length * 0.5 + step * (index + 0.5));
@@ -837,9 +850,11 @@ function Backdrop({
 function ParticleField({
   level,
   snapshotRef,
+  enabled = true,
 }: {
   level: LevelData | null;
   snapshotRef: SnapshotRef;
+  enabled?: boolean;
 }) {
   const pointsRef = useRef<THREE.Points>(null);
   const materialRef = useRef<THREE.PointsMaterial>(null);
@@ -848,11 +863,11 @@ function ParticleField({
   const targetColorRef = useRef(new THREE.Color(SECTION_PALETTES.pulse.primary));
   const starColorRef = useRef(new THREE.Color("#dce7ff"));
 
-  if (!spriteTextureRef.current) {
+  if (enabled && !spriteTextureRef.current) {
     spriteTextureRef.current = createGlowSpriteTexture();
   }
 
-  if (!positionsRef.current) {
+  if (enabled && !positionsRef.current) {
     const pointCount = 160;
     const positions = new Float32Array(pointCount * 3);
 
@@ -867,6 +882,10 @@ function ParticleField({
   }
 
   useFrame((state, delta) => {
+    if (!enabled) {
+      return;
+    }
+
     const snapshot = snapshotRef.current;
     const activeSection = level ? getActiveSection(level.sections, snapshot.time) : null;
     const palette = getSectionPalette(activeSection?.theme);
@@ -890,13 +909,19 @@ function ParticleField({
     materialRef.current.size = 0.11 + snapshot.audio.overall * 0.01;
   });
 
+  if (!enabled) {
+    return null;
+  }
+
+  const positions = positionsRef.current ?? new Float32Array(0);
+
   return (
     <points ref={pointsRef} position={[0, 20, -48]}>
       <bufferGeometry>
         <bufferAttribute
-          args={[positionsRef.current, 3]}
+          args={[positions, 3]}
           attach="attributes-position"
-          count={(positionsRef.current?.length ?? 0) / 3}
+          count={positions.length / 3}
           itemSize={3}
         />
       </bufferGeometry>
@@ -919,9 +944,11 @@ function ParticleField({
 function SpaceVista({
   level,
   snapshotRef,
+  enabled = true,
 }: {
   level: LevelData | null;
   snapshotRef: SnapshotRef;
+  enabled?: boolean;
 }) {
   const { camera } = useThree();
   const groupRef = useRef<THREE.Group>(null);
@@ -936,6 +963,10 @@ function SpaceVista({
   const mutedSecondaryColorRef = useRef(new THREE.Color("#d6e6ff"));
 
   useFrame((state, delta) => {
+    if (!enabled) {
+      return;
+    }
+
     const snapshot = snapshotRef.current;
     const activeSection = level ? getActiveSection(level.sections, snapshot.time) : null;
     const palette = getSectionPalette(activeSection?.theme);
@@ -976,6 +1007,10 @@ function SpaceVista({
       hazeMaterialRef.current.opacity = 0.03 + snapshot.audio.treble * 0.01;
     }
   });
+
+  if (!enabled) {
+    return null;
+  }
 
   return (
     <group ref={groupRef}>
@@ -1332,6 +1367,8 @@ function LavaPool({ zone }: { zone: LavaZone }) {
   );
 }
 
+const MemoLavaPool = memo(LavaPool);
+
 function BeatRing({
   beat,
   currentTime,
@@ -1633,6 +1670,8 @@ function Hazard({ obstacle }: { obstacle: Obstacle }) {
   );
 }
 
+const MemoHazard = memo(Hazard);
+
 function getSectionSpacing(kind: LevelSectionKind) {
   if (kind === "flight") {
     return 10;
@@ -1661,7 +1700,17 @@ function getSectionSpacing(kind: LevelSectionKind) {
   return 14;
 }
 
-function SectionScenery({ section }: { section: LevelSection }) {
+function SectionScenery({
+  section,
+  enabled = true,
+}: {
+  section: LevelSection;
+  enabled?: boolean;
+}) {
+  if (!enabled) {
+    return null;
+  }
+
   const palette = getSectionPalette(section.theme);
   const startX = section.startTime * RUN_SPEED;
   const endX = section.endTime * RUN_SPEED;
@@ -2279,6 +2328,8 @@ function SectionScenery({ section }: { section: LevelSection }) {
   );
 }
 
+const MemoSectionScenery = memo(SectionScenery);
+
 function AlienJelly({
   palette,
   position,
@@ -2355,7 +2406,17 @@ function AlienJelly({
   );
 }
 
-function BiolumSectionScenery({ section }: { section: LevelSection }) {
+function BiolumSectionScenery({
+  section,
+  enabled = true,
+}: {
+  section: LevelSection;
+  enabled?: boolean;
+}) {
+  if (!enabled) {
+    return null;
+  }
+
   const palette = getSectionPalette(section.theme);
   const startX = section.startTime * RUN_SPEED;
   const endX = section.endTime * RUN_SPEED;
@@ -2584,6 +2645,8 @@ function BiolumSectionScenery({ section }: { section: LevelSection }) {
   );
 }
 
+const MemoBiolumSectionScenery = memo(BiolumSectionScenery);
+
 function Track({
   level,
   snapshot,
@@ -2618,14 +2681,14 @@ function Track({
     <group ref={groupRef} position={[PLAYER_TRACK_X - snapshot.time * RUN_SPEED, 0, 0]}>
       {visibleSections.map((section) => (
         <group key={`section-${section.startTime}-${section.kind}`}>
-          <SectionScenery section={section} />
-          {section.kind === "flight" ? <BiolumSectionScenery section={section} /> : null}
+          <MemoSectionScenery enabled={SCENE_DECOR_ENABLED} section={section} />
+          {section.kind === "flight" ? <MemoBiolumSectionScenery enabled={SCENE_DECOR_ENABLED} section={section} /> : null}
           {section.kind === "flight" ? <FlightGateway section={section} pulse={snapshot.audio.overall} /> : null}
         </group>
       ))}
 
       {lavaZones.map((zone) => (
-        <LavaPool key={`${zone.startTime}-${zone.endTime}`} zone={zone} />
+        <MemoLavaPool key={`${zone.startTime}-${zone.endTime}`} zone={zone} />
       ))}
 
       {themedTrackSegments.map((segment) => {
@@ -2746,7 +2809,7 @@ function Track({
         <BeatRing beat={beat} currentTime={snapshot.time} key={beat.time} />
       ))}
 
-      {obstacles.map((obstacle) => <Hazard key={obstacle.time} obstacle={obstacle} />)}
+      {obstacles.map((obstacle) => <MemoHazard key={obstacle.time} obstacle={obstacle} />)}
     </group>
   );
 }
@@ -2785,8 +2848,8 @@ function SceneContent({
       <pointLight color="#7ad7ff" distance={38} intensity={1.85} position={[8, 8, -16]} />
       <CameraRig level={level} snapshotRef={snapshotRef} />
       <Backdrop level={level} snapshotRef={snapshotRef} />
-      <SpaceVista level={level} snapshotRef={snapshotRef} />
-      <ParticleField level={level} snapshotRef={snapshotRef} />
+      <SpaceVista enabled={SCENE_DECOR_ENABLED} level={level} snapshotRef={snapshotRef} />
+      <ParticleField enabled={SCENE_DECOR_ENABLED} level={level} snapshotRef={snapshotRef} />
       <Track level={level} snapshot={snapshot} snapshotRef={snapshotRef} />
       <Orb snapshotRef={snapshotRef} />
       <mesh position={[PLAYER_TRACK_X, GROUND_Y - PLAYER_VISUAL_RADIUS - 0.72, 0]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -2815,7 +2878,7 @@ export function RhythmRunnerScene({
   return (
     <Canvas
       camera={{ fov: 62, position: [PLAYER_TRACK_X - 1.2, 9.8, 37.6], near: 0.1, far: 220 }}
-      dpr={[1, 1.25]}
+      dpr={[1, 1.1]}
       gl={{ alpha: false, antialias: false, powerPreference: "high-performance", stencil: false }}
     >
       <SceneContent level={level} snapshot={snapshot} snapshotRef={snapshotRef} />

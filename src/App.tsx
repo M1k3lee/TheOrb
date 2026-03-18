@@ -141,7 +141,7 @@ export default function App() {
   const deferredProgress = useDeferredValue(snapshot.progress);
   const waveformBars = level?.waveform ?? [];
   const activeBar = Math.floor(deferredProgress * waveformBars.length);
-  const canContinue = snapshot.status === "crashed" && snapshot.bestProgress >= 0.08;
+  const canContinue = snapshot.status === "crashed";
   const tauntTier = getTauntTier(snapshot.deaths);
   const heroTaunt = pickTaunt(
     HERO_TAUNTS[tauntTier],
@@ -173,7 +173,7 @@ export default function App() {
       : snapshot.status === "playing"
           ? "You are always moving. Jump whenever you want, but the clean line is on the cue ring. Tap short, hold longer, and climb the block stacks cleanly."
           : snapshot.status === "crashed"
-            ? `You made it ${Math.round(snapshot.progress * 100)}% through the run. Use Continue Test to restart from the start of this section, or restart clean from zero.`
+            ? `You made it ${Math.round(snapshot.progress * 100)}% through the run. Use Continue From Section on the stage to restart from the start of this section, or restart clean from zero.`
             : snapshot.status === "finished"
               ? "Full clear. Orb, obstacles, and music crossed the line together."
               : "The music could not be started cleanly. Try the launch button again.";
@@ -187,8 +187,29 @@ export default function App() {
         ? {
             label: "Restart Run",
             action: () => void restartGame(),
-          }
-        : null;
+        }
+      : null;
+  const stopStageControlInteraction = (event: {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  }) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const handleStageContinue = (event: {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  }) => {
+    stopStageControlInteraction(event);
+    void continueGame();
+  };
+  const handleStageRestart = (event: {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  }) => {
+    stopStageControlInteraction(event);
+    void restartGame();
+  };
   const handleFullscreenToggle = () => {
     const stage = stageRef.current as FullscreenStageElement | null;
     const fullscreenDocument = document as FullscreenDocument;
@@ -280,8 +301,9 @@ export default function App() {
             <RhythmRunnerScene level={level} snapshot={snapshot} snapshotRef={snapshotRef} />
           </div>
 
-          {!isFullscreen ? (
-            <div className="stage-overlay">
+          <div className="stage-overlay">
+            {!isFullscreen ? (
+              <>
               <div className="progress-panel">
                 <div className="progress-panel__meta">
                   <span>Perfect sync</span>
@@ -308,6 +330,35 @@ export default function App() {
                     Fullscreen
                   </button>
                 ) : null}
+              </div>
+              </>
+            ) : null}
+          </div>
+
+          {canContinue ? (
+            <div className="stage-crash-panel" data-ui-interactive="true">
+              <span className="stage-crash-panel__eyebrow">Run Interrupted</span>
+              <h2>Continue from this section?</h2>
+              <p>You crashed at {Math.round(snapshot.progress * 100)}%. Jump straight back in or restart from zero.</p>
+              <div className="stage-crash-actions" data-ui-interactive="true">
+                <button
+                  className="button button--primary"
+                  data-ui-interactive="true"
+                  onClick={handleStageContinue}
+                  onPointerDown={stopStageControlInteraction}
+                  type="button"
+                >
+                  Continue From Section
+                </button>
+                <button
+                  className="button button--ghost"
+                  data-ui-interactive="true"
+                  onClick={handleStageRestart}
+                  onPointerDown={stopStageControlInteraction}
+                  type="button"
+                >
+                  Restart From Zero
+                </button>
               </div>
             </div>
           ) : null}
@@ -358,17 +409,6 @@ export default function App() {
                 type="button"
               >
                 {primaryAction.label}
-              </button>
-            ) : null}
-
-            {canContinue ? (
-              <button
-                className="button button--ghost"
-                data-ui-interactive="true"
-                onClick={() => void continueGame()}
-                type="button"
-              >
-                Continue Test
               </button>
             ) : null}
 

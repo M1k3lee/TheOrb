@@ -1,4 +1,5 @@
 export const RUN_SPEED = 21.2;
+export const PHYSICS_STEP = 1 / 180;
 export const PLAYER_VISUAL_RADIUS = 0.74;
 export const PLAYER_COLLISION_RADIUS = 0.68;
 export const GROUND_Y = 1.08;

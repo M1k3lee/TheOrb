@@ -11,6 +11,7 @@ import {
   HOLD_JUMP_GRAVITY_MULTIPLIER,
   JUMP_VELOCITY,
   LOW_JUMP_GRAVITY_MULTIPLIER,
+  PHYSICS_STEP,
   PLAYER_COLLISION_RADIUS,
   RUN_SPEED,
 } from "./constants";
@@ -30,11 +31,10 @@ const WAVEFORM_BAR_COUNT = 240;
 const ENERGY_SAMPLE_COUNT = 320;
 const BAR_BEAT_COUNT = 8;
 const LAVA_SURFACE_Y = 0.22;
-const SIMULATION_STEP = 1 / 180;
 const MIN_PULSE_INTERVAL = 0.28;
 const MAX_PULSE_INTERVAL = 0.72;
 const GRID_SNAP_WINDOW_RATIO = 0.22;
-const OBSTACLE_SYNC_OFFSET_SCALE = 0.22;
+const OBSTACLE_SYNC_OFFSET_SCALE = 0.18;
 const PLAYER_COLLISION_HEIGHT = PLAYER_COLLISION_RADIUS * (0.84 + 0.72);
 const MIN_STACK_PASSAGE_HEIGHT = PLAYER_COLLISION_HEIGHT + 0.14;
 const OVERHEAD_ESCAPE_TIME = 0.11;
@@ -156,7 +156,7 @@ const DOWNBOY_PROFILE: TrackProfile = {
     },
   ],
   energyCameraStyles: ["rear", "rush", "sweep", "hero"],
-  obstacleLeadBias: 0.042,
+  obstacleLeadBias: 0.012,
 };
 
 const FOUND_DA_PROFILE: TrackProfile = {
@@ -232,7 +232,7 @@ const FOUND_DA_PROFILE: TrackProfile = {
     },
   ],
   energyCameraStyles: ["hero", "sweep", "rear", "rush"],
-  obstacleLeadBias: 0.026,
+  obstacleLeadBias: 0.01,
 };
 
 const SECTION_THEME_POOLS: Record<SectionType, LevelSectionTheme[]> = {
@@ -1082,17 +1082,53 @@ function buildClimbBar(
   barEnergy: number,
   useLava: boolean,
   leadBias: number,
+  variant: number,
 ) {
   const cueOffsets = [0, 1, 2, 3, 4];
-  const topHeights = [
-    1.28,
-    clamp(2.16 + barEnergy * 0.14, 2.16, 2.44),
-    clamp(3.04 + barEnergy * 0.16, 3.04, 3.36),
-    clamp(4.04 + sectionProgress * 0.24 + barEnergy * 0.14, 4.04, 4.56),
-    1.44 + sectionProgress * 0.08,
-  ];
-  const widths = [5.9, 4.8, 4.4, 4.0, 6.1];
-  const thicknesses = [1.18, 0.42, 0.38, 0.34, 1.12];
+  const climbVariant = ((variant % 3) + 3) % 3;
+  const topHeights =
+    climbVariant === 1
+      ? [
+          1.34,
+          clamp(2.06 + barEnergy * 0.1, 2.06, 2.28),
+          clamp(3.02 + sectionProgress * 0.12 + barEnergy * 0.1, 3.02, 3.28),
+          clamp(4.22 + sectionProgress * 0.18 + barEnergy * 0.12, 4.22, 4.6),
+          1.58 + sectionProgress * 0.1,
+        ]
+      : climbVariant === 2
+        ? [
+            1.24,
+            clamp(2.34 + barEnergy * 0.16, 2.34, 2.58),
+            clamp(3.18 + sectionProgress * 0.16 + barEnergy * 0.14, 3.18, 3.46),
+            clamp(4.1 + sectionProgress * 0.22 + barEnergy * 0.14, 4.1, 4.62),
+            1.38 + sectionProgress * 0.08,
+          ]
+        : [
+            1.28,
+            clamp(2.16 + barEnergy * 0.14, 2.16, 2.44),
+            clamp(3.04 + barEnergy * 0.16, 3.04, 3.36),
+            clamp(4.04 + sectionProgress * 0.24 + barEnergy * 0.14, 4.04, 4.56),
+            1.44 + sectionProgress * 0.08,
+          ];
+  const widths =
+    climbVariant === 1
+      ? [5.6, 4.2, 4.0, 4.6, 6.3]
+      : climbVariant === 2
+        ? [6.0, 4.9, 4.1, 3.8, 5.9]
+        : [5.9, 4.8, 4.4, 4.0, 6.1];
+  const thicknesses =
+    climbVariant === 1
+      ? [1.12, 0.38, 0.36, 0.38, 1.06]
+      : climbVariant === 2
+        ? [1.16, 0.4, 0.36, 0.32, 1.08]
+        : [1.18, 0.42, 0.38, 0.34, 1.12];
+  const frontDelays =
+    climbVariant === 1
+      ? [0.132, 0.144, 0.156, 0.17, 0.194]
+      : climbVariant === 2
+        ? [0.128, 0.148, 0.16, 0.176, 0.202]
+        : cueOffsets.map((_, index) => 0.14 + index * 0.006);
+  const hueBase = climbVariant === 1 ? 176 : climbVariant === 2 ? 188 : 164;
   const cues = cueOffsets.map((offset, index) =>
     createCue(
       barBeats[offset],
@@ -1107,8 +1143,8 @@ function buildClimbBar(
       widths[index],
       topHeights[index],
       thicknesses[index],
-      0.14 + index * 0.006,
-      164,
+      frontDelays[index],
+      hueBase,
       0.64 + barEnergy * 0.18,
       leadBias,
     ),
@@ -2217,7 +2253,7 @@ function buildLevelLayout(gridBeats: GridBeat[], duration: number, trackId: Trac
       3;
     const generatedBar =
       sectionType === "climb"
-        ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy, useLava, leadBias)
+        ? buildClimbBar(barBeats, barIndex, sectionProgress, barEnergy, useLava, leadBias, sectionVariant)
         : sectionType === "drop"
           ? buildDropBar(barBeats, barIndex, sectionProgress, barEnergy, useLava, leadBias)
           : sectionType === "gauntlet"
@@ -2563,12 +2599,12 @@ function simulateLayout(
         playerY < targetY - 0.08 ||
         (playerVelocity < -0.8 && playerY < targetY + 0.18);
 
-      playerVelocity += (wantsLift ? FLIGHT_THRUST_ACCELERATION : -FLIGHT_FALL_ACCELERATION) * SIMULATION_STEP;
-      playerVelocity *= Math.exp(-FLIGHT_DRAG * SIMULATION_STEP);
+      playerVelocity += (wantsLift ? FLIGHT_THRUST_ACCELERATION : -FLIGHT_FALL_ACCELERATION) * PHYSICS_STEP;
+      playerVelocity *= Math.exp(-FLIGHT_DRAG * PHYSICS_STEP);
       playerVelocity = clamp(playerVelocity, -FLIGHT_MAX_SPEED, FLIGHT_MAX_SPEED);
-      playerY += playerVelocity * SIMULATION_STEP;
+      playerY += playerVelocity * PHYSICS_STEP;
     } else {
-      while (cueIndex < cues.length && cues[cueIndex].time <= time + SIMULATION_STEP * 0.5) {
+      while (cueIndex < cues.length && cues[cueIndex].time <= time + PHYSICS_STEP * 0.5) {
         if (cues[cueIndex].action !== "flight" && (grounded || coyoteTime > 0)) {
           grounded = false;
           playerVelocity = JUMP_VELOCITY;
@@ -2585,7 +2621,7 @@ function simulateLayout(
         if (playerVelocity > 0) {
           if (holdTime > 0) {
             gravity *= HOLD_JUMP_GRAVITY_MULTIPLIER;
-            holdTime = Math.max(0, holdTime - SIMULATION_STEP);
+            holdTime = Math.max(0, holdTime - PHYSICS_STEP);
           } else {
             gravity *= LOW_JUMP_GRAVITY_MULTIPLIER;
           }
@@ -2593,8 +2629,8 @@ function simulateLayout(
           gravity *= FALL_GRAVITY_MULTIPLIER;
         }
 
-        playerVelocity -= gravity * SIMULATION_STEP;
-        playerY += playerVelocity * SIMULATION_STEP;
+        playerVelocity -= gravity * PHYSICS_STEP;
+        playerY += playerVelocity * PHYSICS_STEP;
       } else if (playerY <= GROUND_Y + 0.001) {
         playerY = GROUND_Y;
         playerVelocity = 0;
@@ -2628,7 +2664,7 @@ function simulateLayout(
         ? 0
         : grounded
           ? COYOTE_TIME
-          : Math.max(0, coyoteTime - SIMULATION_STEP);
+          : Math.max(0, coyoteTime - PHYSICS_STEP);
 
     if (collisionResult.crashed) {
       return {
@@ -2638,7 +2674,7 @@ function simulateLayout(
       };
     }
 
-    time += SIMULATION_STEP;
+    time += PHYSICS_STEP;
   }
 
   return null;
